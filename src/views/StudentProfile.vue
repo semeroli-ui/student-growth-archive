@@ -3,7 +3,7 @@
   <div v-else-if="!student" class="card">未找到该学生档案。</div>
   <div v-else>
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px" class="no-print">
-      <a class="back" href="#/" @click.prevent="$router.push('/')">← 返回班级概览</a>
+      <a class="back" href="#/app" @click.prevent="$router.push('/app')">← 返回班级概览</a>
       <span class="spacer" style="flex:1"></span>
       <button class="btn outline" @click="exportPDF">
         📄 导出PDF

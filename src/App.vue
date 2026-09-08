@@ -4,7 +4,7 @@
       <span style="font-size:22px">📚</span>
       <h1>学生成长档案</h1>
       <span class="spacer"></span>
-      <router-link to="/">班级概览</router-link>
+      <router-link to="/app">班级概览</router-link>
       <span class="topbar-divider"></span>
       <span class="user-info">
         <span class="user-avatar">{{ userInfo?.name?.charAt(0) || '?' }}</span>
@@ -13,7 +13,7 @@
       </span>
       <button class="logout-btn" @click="handleLogout">退出</button>
     </header>
-    <main class="container">
+    <main :class="route.meta.fullscreen ? 'page-fullscreen' : 'container'">
       <router-view />
     </main>
   </div>
@@ -27,7 +27,7 @@ import { isLoggedIn, getUser, getRole, logout } from './api/auth.js'
 const route = useRoute()
 const router = useRouter()
 
-const showTopbar = computed(() => route.name !== 'login')
+const showTopbar = computed(() => !route.meta.fullscreen)
 
 const userInfo = computed(() => {
   // 响应式：route 变化时重新读取
