@@ -93,6 +93,32 @@ body {
 .back { color: var(--accent); text-decoration: none; font-size: 14px; }
 .chart { width: 100%; height: 320px; }
 
+/* === 顶栏用户区 === */
+.topbar-divider { width: 1px; height: 20px; background: rgba(255,255,255,0.2); }
+.user-info { display: flex; align-items: center; gap: 8px; }
+.user-avatar {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 600;
+}
+.user-name { font-size: 14px; opacity: 0.9; }
+.role-tag {
+  font-size: 11px; padding: 1px 8px; border-radius: 10px;
+  background: rgba(255,255,255,0.15); opacity: 0.8;
+}
+.logout-btn {
+  background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.2);
+  color: #fff; padding: 4px 12px; border-radius: 6px;
+  font-size: 13px; cursor: pointer; transition: background 0.2s;
+}
+.logout-btn:hover { background: rgba(255,255,255,0.25); }
+
+@media (max-width: 768px) {
+  .topbar { flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
+  .topbar h1 { font-size: 18px; }
+  .user-name { display: none; }
+}
+
 /* === AI 报告区域 === */
 .btn.primary { background: var(--accent); }
 .btn.outline { background: transparent; border: 1px solid var(--primary); color: var(--primary); }

@@ -2,12 +2,20 @@
 // 当前用 mock；接真实数据时只需改 USE_WORKER 为 true 并填 WORKER_URL。
 
 import { students } from '../data/mock.js'
+import { getToken } from './auth.js'
 
 // ===== 接 CF Workers =====
 const USE_WORKER = false  // ← 改为 true 并填下面 URL 即可切换到真实后端
 const WORKER_URL = ''     // 例如 'https://student-growth-archive-api.your-subdomain.workers.dev'
 
-async function fetchJSON(url, options) {
+async function fetchJSON(url, options = {}) {
+  const token = getToken()
+  if (token) {
+    options.headers = {
+      ...(options.headers || {}),
+      'Authorization': `Bearer ${token}`
+    }
+  }
   const r = await fetch(url, options)
   if (!r.ok) throw new Error('请求失败: ' + r.status)
   return r.json()
