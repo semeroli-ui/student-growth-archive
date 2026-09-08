@@ -39,24 +39,46 @@
 
     <!-- AI 报告 -->
     <div class="card">
-      <h2>AI 成长画像与建议</h2>
-      <p>{{ student.aiReport.profile }}</p>
-      <div style="margin-top:12px">
-        <strong class="weakness">薄弱点：</strong>
-        <ul>
-          <li v-for="(w, i) in student.aiReport.weaknesses" :key="i" class="weakness">
-            {{ w.subject }} — {{ w.reason }}
-          </li>
-        </ul>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <h2 style="margin:0">AI 成长画像与建议</h2>
+        <span v-if="aiSource" class="badge" :class="{ warn: aiSource === 'fallback' }">
+          {{ aiSource === 'ai' ? '✨ AI 实时生成' : '⚡ 预置报告' }}
+        </span>
+        <span class="spacer" style="flex:1"></span>
+        <button
+          class="btn primary"
+          :disabled="aiLoading"
+          @click="regenerateAI"
+        >{{ aiLoading ? '生成中…' : '🔄 重新生成' }}</button>
       </div>
-      <div style="margin-top:12px">
-        <strong>个性化建议：</strong>
-        <div v-for="(s, i) in student.aiReport.suggestions" :key="i" class="suggestion">{{ s }}</div>
+
+      <div v-if="aiLoading" class="ai-loading">
+        <div class="loading-dots"><span></span><span></span><span></span></div>
+        <p>AI 正在分析学生数据并生成个性化报告…</p>
       </div>
-      <div class="suggestion" style="border-color:var(--accent);background:var(--accent-light)">
-        <strong>家校沟通话术：</strong>{{ student.aiReport.talkScript }}
+
+      <div v-else>
+        <p>{{ aiReport.profile }}</p>
+        <div v-if="aiReport.weaknesses && aiReport.weaknesses.length" style="margin-top:12px">
+          <strong class="weakness">薄弱点：</strong>
+          <ul>
+            <li v-for="(w, i) in aiReport.weaknesses" :key="i" class="weakness">
+              {{ w.subject }} — {{ w.reason }}
+            </li>
+          </ul>
+        </div>
+        <div v-if="aiReport.suggestions && aiReport.suggestions.length" style="margin-top:12px">
+          <strong>个性化建议：</strong>
+          <div v-for="(s, i) in aiReport.suggestions" :key="i" class="suggestion">{{ s }}</div>
+        </div>
+        <div v-if="aiReport.talkScript" class="suggestion" style="border-color:var(--accent);background:var(--accent-light)">
+          <strong>家校沟通话术：</strong>{{ aiReport.talkScript }}
+        </div>
+        <p v-if="aiError" style="color:var(--warn);font-size:12px;margin-top:8px">
+          ⚠ {{ aiError }}
+        </p>
+        <p style="color:var(--muted);font-size:12px;margin-top:10px">* 以上内容由 AI 生成，仅供参考，以教师判断为准。</p>
       </div>
-      <p style="color:var(--muted);font-size:12px;margin-top:10px">* 以上内容由 AI 生成，仅供参考，以教师判断为准。</p>
     </div>
 
     <!-- 时间线 -->
@@ -75,22 +97,83 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getStudent } from '../api/student.js'
+import { getStudent, generateAIReport } from '../api/student.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
 
 const route = useRoute()
 const student = ref(null)
 const loading = ref(true)
+const aiReport = ref(null)
+const aiLoading = ref(false)
+const aiSource = ref('')
+const aiError = ref('')
 
 onMounted(async () => {
   student.value = await getStudent(route.params.id)
   loading.value = false
+  // 初始展示已有报告
+  if (student.value?.aiReport) {
+    aiReport.value = student.value.aiReport
+    aiSource.value = 'preset'
+  }
 })
 
-// 导出 PDF：用浏览器原生打印，配合 @media print 样式
+async function regenerateAI() {
+  if (!student.value) return
+  aiLoading.value = true
+  aiError.value = ''
+  try {
+    const result = await generateAIReport(student.value.id)
+    if (result?.error) {
+      aiError.value = result.error
+    } else {
+      aiReport.value = result
+      aiSource.value = result._source || 'ai'
+      if (result._error) aiError.value = 'AI 服务异常，已使用预置报告兜底'
+    }
+  } catch (err) {
+    aiError.value = err.message
+    // 兜底用原数据
+    if (student.value?.aiReport) {
+      aiReport.value = student.value.aiReport
+      aiSource.value = 'fallback'
+    }
+  } finally {
+    aiLoading.value = false
+  }
+}
+
 async function exportPDF() {
   await nextTick()
   window.print()
 }
 </script>
+
+<style scoped>
+.ai-loading {
+  text-align: center;
+  padding: 24px;
+}
+.ai-loading p {
+  color: var(--muted);
+  margin-top: 12px;
+}
+.loading-dots {
+  display: inline-flex;
+  gap: 6px;
+}
+.loading-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: bounce 1.2s infinite ease-in-out;
+}
+.loading-dots span:nth-child(2) { animation-delay: 0.15s; }
+.loading-dots span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+</style>
