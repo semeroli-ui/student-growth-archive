@@ -165,7 +165,8 @@ async function handleLogin() {
         sessionStorage.setItem('sga_role', result.role)
         sessionStorage.setItem('sga_user', JSON.stringify(result.user))
       }
-      router.push('/app')
+      const target = (result.user && result.user.mustChangePwd) ? '/admin?tab=pwd' : '/app'
+      router.push(target)
     } else {
       errorMsg.value = result.error || '登录失败，请检查账号密码'
     }

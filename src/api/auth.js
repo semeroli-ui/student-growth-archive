@@ -1,5 +1,5 @@
 // 认证 API 层
-// 管理登录、登出、token 存储、角色判断
+// 管理登录、登出、token 存储、角色判断、改密
 
 const USE_WORKER = true   // ← 与 student.js 同步切换
 const WORKER_URL = 'https://student-growth-archive-api.wkyong2008.workers.dev'
@@ -22,8 +22,18 @@ export function getUser() {
   try { return raw ? JSON.parse(raw) : null } catch { return null }
 }
 
+export function getMustChangePwd() {
+  return !!getUser()?.mustChangePwd
+}
+
 export function isLoggedIn() {
   return !!getToken()
+}
+
+// 是否为教师或管理员（可进入管理后台）
+export function isStaff() {
+  const r = getRole()
+  return r === 'teacher' || r === 'admin'
 }
 
 export function logout() {
@@ -35,10 +45,16 @@ export function logout() {
   sessionStorage.removeItem(USER_KEY)
 }
 
+function saveSession(result, remember) {
+  const store = remember ? localStorage : sessionStorage
+  store.setItem(TOKEN_KEY, result.token)
+  store.setItem(ROLE_KEY, result.role)
+  store.setItem(USER_KEY, JSON.stringify(result.user))
+}
+
 // ===== 登录请求 =====
 export async function login(role, account, password) {
   if (USE_WORKER) {
-    // 真实模式：调 Workers /auth/login
     const r = await fetch(`${WORKER_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -51,33 +67,40 @@ export async function login(role, account, password) {
     return { success: false, error: data.error || '登录失败' }
   }
 
-  // ===== Mock 模式：本地验证 =====
-  await new Promise(r => setTimeout(r, 600)) // 模拟网络延迟
-
+  // ===== Mock 模式 =====
+  await new Promise(r => setTimeout(r, 600))
   const mockUsers = [
-    // 教师
     { role: 'teacher', account: 'teacher', password: '123456', name: '王老师', id: 'T001', className: '高三(2)班' },
-    { role: 'teacher', account: 'admin', password: 'admin', name: '管理员', id: 'A001', className: '全部班级' },
-    // 学生
+    { role: 'admin', account: 'admin', password: '123456', name: '管理员', id: 'A001', className: '全部班级' },
     { role: 'student', account: '2024001', password: '123456', name: '李明', id: '2024001', className: '高三(2)班' },
     { role: 'student', account: '2024002', password: '123456', name: '王芳', id: '2024002', className: '高三(2)班' },
     { role: 'student', account: '2024003', password: '123456', name: '张伟', id: '2024003', className: '高三(2)班' }
   ]
-
-  const user = mockUsers.find(u =>
-    u.role === role && u.account === account && u.password === password
-  )
-
+  const user = mockUsers.find(u => u.account === account && u.password === password)
   if (user) {
-    // 生成简单 mock token
     const token = btoa(`${user.id}:${Date.now()}:${Math.random()}`)
-    return {
-      success: true,
-      token,
-      role: user.role,
-      user: { id: user.id, name: user.name, className: user.className }
-    }
+    return { success: true, token, role: user.role, user: { id: user.id, name: user.name, className: user.className } }
   }
-
   return { success: false, error: '账号或密码错误' }
+}
+
+export async function changePassword(oldPassword, newPassword) {
+  const token = getToken()
+  const r = await fetch(`${WORKER_URL}/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+    body: JSON.stringify({ oldPassword, newPassword })
+  })
+  const data = await r.json()
+  if (r.ok && data.success) {
+    // 更新本地会话中的 mustChangePwd 标记
+    const u = getUser()
+    if (u) {
+      u.mustChangePwd = false
+      const store = localStorage.getItem(TOKEN_KEY) ? localStorage : sessionStorage
+      store.setItem(USER_KEY, JSON.stringify(u))
+    }
+    return { success: true }
+  }
+  return { success: false, error: data.error || '修改失败' }
 }

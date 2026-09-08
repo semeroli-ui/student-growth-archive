@@ -5,6 +5,7 @@
       <h1>学生成长档案</h1>
       <span class="spacer"></span>
       <router-link to="/app">班级概览</router-link>
+      <router-link v-if="isStaff" to="/admin">管理</router-link>
       <span class="topbar-divider"></span>
       <span class="user-info">
         <span class="user-avatar">{{ userInfo?.name?.charAt(0) || '?' }}</span>
@@ -35,9 +36,13 @@ const userInfo = computed(() => {
   return getUser()
 })
 
+const isStaff = computed(() => {
+  const r = getRole()
+  return r === 'teacher' || r === 'admin'
+})
 const roleLabel = computed(() => {
   const r = getRole()
-  return r === 'teacher' ? '教师' : r === 'student' ? '学生' : ''
+  return r === 'teacher' ? '教师' : r === 'student' ? '学生' : r === 'admin' ? '管理员' : ''
 })
 
 function handleLogout() {
