@@ -5,8 +5,8 @@ import { students } from '../data/mock.js'
 import { getToken } from './auth.js'
 
 // ===== 接 CF Workers =====
-const USE_WORKER = false  // ← 改为 true 并填下面 URL 即可切换到真实后端
-const WORKER_URL = ''     // 例如 'https://student-growth-archive-api.your-subdomain.workers.dev'
+const USE_WORKER = true  // ← 切换开关
+const WORKER_URL = 'https://student-growth-archive-api.wkyong2008.workers.dev'
 
 async function fetchJSON(url, options = {}) {
   const token = getToken()
