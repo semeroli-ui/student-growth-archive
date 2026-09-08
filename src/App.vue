@@ -4,7 +4,8 @@
       <span style="font-size:22px">📚</span>
       <h1>学生成长档案</h1>
       <span class="spacer"></span>
-      <router-link to="/app">班级概览</router-link>
+      <router-link v-if="isStaff" to="/app">班级概览</router-link>
+      <router-link v-if="isParent" to="/parent">我的孩子</router-link>
       <router-link v-if="isStaff" to="/admin">管理</router-link>
       <span class="topbar-divider"></span>
       <span class="user-info">
@@ -23,7 +24,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { isLoggedIn, getUser, getRole, logout } from './api/auth.js'
+import { isLoggedIn, getUser, getRole, logout, isParent as isParentFn } from './api/auth.js'
 
 const route = useRoute()
 const router = useRouter()
@@ -40,9 +41,10 @@ const isStaff = computed(() => {
   const r = getRole()
   return r === 'teacher' || r === 'admin'
 })
+const isParent = computed(() => isParentFn())
 const roleLabel = computed(() => {
   const r = getRole()
-  return r === 'teacher' ? '教师' : r === 'student' ? '学生' : r === 'admin' ? '管理员' : ''
+  return r === 'teacher' ? '教师' : r === 'student' ? '学生' : r === 'admin' ? '管理员' : r === 'parent' ? '家长' : ''
 })
 
 function handleLogout() {

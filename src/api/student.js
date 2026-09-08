@@ -100,3 +100,15 @@ export async function importStudents(rows) {
   }
   return { success: true, created: rows.length, skipped: 0, errors: [] }
 }
+
+// 家长查看自己关联的孩子列表
+export async function getParentChildren() {
+  if (USE_WORKER) return fetchJSON(`${WORKER_URL}/parent/children`)
+  return []
+}
+
+// 家长查看单个孩子档案（后端已剔除心理画像）
+export async function getParentStudent(id) {
+  if (USE_WORKER) return fetchJSON(`${WORKER_URL}/parent/student/${id}`)
+  return null
+}

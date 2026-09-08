@@ -104,3 +104,53 @@ export async function changePassword(oldPassword, newPassword) {
   }
   return { success: false, error: data.error || '修改失败' }
 }
+
+// 是否为家长
+export function isParent() {
+  return getRole() === 'parent'
+}
+
+// 带鉴权的统一请求（返回 { ok, data }，data 为解析后的 JSON）
+async function authFetch(path, options = {}) {
+  const token = getToken()
+  const r = await fetch(`${WORKER_URL}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, ...(options.headers || {}) }
+  })
+  const data = await r.json().catch(() => ({}))
+  return { ok: r.ok, data }
+}
+
+// ===== 邀请码自助注册（公开）=====
+export async function register(payload) {
+  const r = await fetch(`${WORKER_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+  const data = await r.json().catch(() => ({}))
+  if (r.ok && data.success) return { success: true, token: data.token, role: data.role, user: data.user }
+  return { success: false, error: data.error || '注册失败' }
+}
+
+// ===== 邀请码管理（仅管理员）=====
+export async function createInviteCodes(payload) {
+  return authFetch('/admin/invite-codes', { method: 'POST', body: JSON.stringify(payload) })
+}
+export async function getInviteCodes() {
+  return authFetch('/admin/invite-codes')
+}
+export async function revokeInviteCode(code) {
+  return authFetch(`/admin/invite-codes/${code}`, { method: 'DELETE' })
+}
+
+// ===== 家长管理（教师/管理员）=====
+export async function createParent(payload) {
+  return authFetch('/admin/parents', { method: 'POST', body: JSON.stringify(payload) })
+}
+export async function getParents() {
+  return authFetch('/admin/parents')
+}
+export async function linkParentStudent(parentId, studentId) {
+  return authFetch('/admin/parent-links', { method: 'POST', body: JSON.stringify({ parentId, studentId }) })
+}

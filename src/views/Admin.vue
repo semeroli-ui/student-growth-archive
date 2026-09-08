@@ -10,6 +10,8 @@
       <div class="tabs">
         <button :class="['tab', { active: tab === 'students' }]" @click="switchTab('students')">学生管理</button>
         <button v-if="isAdmin" :class="['tab', { active: tab === 'teachers' }]" @click="switchTab('teachers')">教师管理</button>
+        <button v-if="isAdmin" :class="['tab', { active: tab === 'invites' }]" @click="switchTab('invites')">邀请码管理</button>
+        <button v-if="isStaff" :class="['tab', { active: tab === 'parents' }]" @click="switchTab('parents')">家长管理</button>
         <button :class="['tab', { active: tab === 'pwd' }]" @click="switchTab('pwd')">我的密码</button>
       </div>
     </div>
@@ -73,6 +75,16 @@
       </div>
     </div>
 
+    <!-- ============ 邀请码管理（仅管理员） ============ -->
+    <div v-show="tab === 'invites' && isAdmin">
+      <InviteManager />
+    </div>
+
+    <!-- ============ 家长管理（教师/管理员） ============ -->
+    <div v-show="tab === 'parents' && isStaff">
+      <ParentManager />
+    </div>
+
     <!-- ============ 我的密码 ============ -->
     <div v-show="tab === 'pwd'">
       <div class="card" style="max-width:480px">
@@ -128,10 +140,13 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getRole, getMustChangePwd, changePassword } from '../api/auth.js'
+import InviteManager from '../components/InviteManager.vue'
+import ParentManager from '../components/ParentManager.vue'
 import { getStudents, getClassrooms, createStudent, importStudents, getTeachers, createTeacher } from '../api/student.js'
 
 const route = useRoute()
 const isAdmin = getRole() === 'admin'
+const isStaff = getRole() === 'teacher' || getRole() === 'admin'
 const mustChangePwd = getMustChangePwd()
 
 const tab = ref('students')
@@ -251,7 +266,7 @@ async function doChangePwd() {
 
 onMounted(async () => {
   const q = route.query.tab
-  if (q === 'pwd' || q === 'teachers' || q === 'students') tab.value = q
+  if (q === 'pwd' || q === 'teachers' || q === 'students' || q === 'invites' || q === 'parents') tab.value = q
   if (mustChangePwd.value) tab.value = 'pwd'
   try { classrooms.value = await getClassrooms() } catch {}
   loadStudents()
