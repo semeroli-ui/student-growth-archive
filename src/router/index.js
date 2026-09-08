@@ -1,12 +1,14 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
+import Landing from '../views/Landing.vue'
 import Dashboard from '../views/Dashboard.vue'
 import StudentProfile from '../views/StudentProfile.vue'
 import Login from '../views/Login.vue'
 import { isLoggedIn, getRole } from '../api/auth.js'
 
 const routes = [
-  { path: '/login', name: 'login', component: Login, meta: { public: true } },
-  { path: '/', name: 'dashboard', component: Dashboard, meta: { requiresAuth: true } },
+  { path: '/', name: 'landing', component: Landing, meta: { public: true, fullscreen: true } },
+  { path: '/login', name: 'login', component: Login, meta: { public: true, fullscreen: true } },
+  { path: '/app', name: 'dashboard', component: Dashboard, meta: { requiresAuth: true } },
   { path: '/student/:id', name: 'student', component: StudentProfile, meta: { requiresAuth: true } }
 ]
 
