@@ -53,8 +53,8 @@
           <p>请使用您的账号登录</p>
         </div>
 
-        <!-- 角色切换 -->
-        <div class="role-switch">
+        <!-- 角色切换：仅未登录时显示，防止已登录用户误切账号 -->
+        <div class="role-switch" v-if="!isLoggedIn">
           <button
             :class="['role-btn', { active: role === 'teacher' }]"
             @click="role = 'teacher'"
@@ -145,9 +145,9 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { login } from '../api/auth.js'
+import { login, isLoggedIn } from '../api/auth.js'
 
 const router = useRouter()
 const role = ref('teacher')
