@@ -640,6 +640,12 @@ export async function onRequest(context) {
   if (path === '/health' || path === '/') {
     return jsonResp({ status: 'ok', source: 'pages-functions', time: new Date().toISOString() })
   }
+  // KV 诊断
+  if (path === '/debug/kv' && method === 'GET') {
+    const kvTest = await env.SESSIONS?.put('__kv_test__', 'ok', { expirationTtl: 60 })
+    const kvGet = await env.SESSIONS?.get('__kv_test__')
+    return jsonResp({ env: typeof env, dbType: typeof env?.DB, sessionsType: typeof env?.SESSIONS, kvPut: kvTest, kvGet })
+  }
 
   // 需要登录
   const { user, response } = await requireAuth(request, env)
