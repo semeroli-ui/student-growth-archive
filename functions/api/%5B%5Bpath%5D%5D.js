@@ -667,7 +667,8 @@ export async function onRequest(context) {
     const className = user.role === 'student'
       ? user.className
       : (url.searchParams.get('class') || user.className)
-    return jsonResp(await dbGetStudents(env, className))
+    const students = await dbGetStudents(env, className)
+    return jsonResp(students)
   }
 
   // 单条添加学生
