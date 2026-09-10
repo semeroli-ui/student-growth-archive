@@ -113,3 +113,42 @@ export async function getParentStudent(id) {
   if (USE_WORKER) return fetchJSON(`${API}/parent/student/${id}`)
   return null
 }
+
+// ===== 科目库（成绩单下拉，覆盖全科）=====
+export async function getSubjects() {
+  if (USE_WORKER) return fetchJSON(`${API}/subjects`)
+  return ['语文', '数学', '英语', '音乐', '美术', '体育', '道法', '科学', '物理', '化学', '生物', '历史', '地理', '政治']
+}
+
+// 编辑学生（教师/管理员）
+export async function updateStudent(id, payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/students/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}
+
+// 删除学生（教师/管理员，级联删除成绩/行为/事件等）
+export async function deleteStudent(id) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/students/${id}`, { method: 'DELETE' })
+  }
+  return { success: true }
+}
+
+// 教师添加单条成绩
+// payload: { examName, subject, score }
+export async function addScore(studentId, payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/student/${studentId}/score`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}

@@ -45,23 +45,49 @@
               <span v-for="c in p.children" :key="c.id" class="tag">{{ c.name }}</span>
             </span>
           </td>
-          <td>
-            <select v-model="linkSel[p.id]" class="sel-sm">
-              <option value="">关联更多孩子…</option>
-              <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}（{{ s.className }}）</option>
-            </select>
-            <button class="btn outline sm" :disabled="!linkSel[p.id]" @click="doLink(p.id, linkSel[p.id])">+ 关联</button>
+          <td class="ops">
+            <div class="op-row">
+              <button class="btn outline sm" @click="openEditParent(p)">编辑</button>
+              <button class="btn danger sm" @click="askDeleteParent(p)">删除</button>
+            </div>
+            <div class="op-row">
+              <select v-model="linkSel[p.id]" class="sel-sm">
+                <option value="">关联更多孩子…</option>
+                <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}（{{ s.className }}）</option>
+              </select>
+              <button class="btn outline sm" :disabled="!linkSel[p.id]" @click="doLink(p.id, linkSel[p.id])">+ 关联</button>
+            </div>
           </td>
         </tr>
         <tr v-if="!parents.length"><td colspan="4" class="sub" style="padding:16px">暂无家长账号</td></tr>
       </tbody>
     </table>
+
+    <!-- 编辑家长 模态 -->
+    <div v-if="showEditParent" class="modal-mask" @click.self="showEditParent = false">
+      <div class="modal">
+        <h3>编辑家长</h3>
+        <div class="field"><label>账号</label><input :value="editParentForm.account" class="input" disabled /></div>
+        <div class="field"><label>姓名 *</label><input v-model="editParentForm.name" class="input" /></div>
+        <div class="field"><label>重置密码（留空则不修改）</label><input v-model="editParentForm.password" class="input" type="password" placeholder="留空不改" /></div>
+        <div class="field"><label>关联孩子（重选将覆盖原关联）</label>
+          <select v-model="editParentForm.studentIds" multiple class="input mult">
+            <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}（{{ s.className }} · {{ s.id }}）</option>
+          </select>
+          <span class="hint">按住 Ctrl/Cmd 多选</span>
+        </div>
+        <div class="modal-actions">
+          <button class="btn outline" @click="showEditParent = false">取消</button>
+          <button class="btn" :disabled="editLoading" @click="doEditParent">{{ editLoading ? '保存中…' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { getParents, createParent, linkParentStudent } from '../api/auth.js'
+import { getParents, createParent, linkParentStudent, updateParent, deleteParent } from '../api/auth.js'
 import { getStudents } from '../api/student.js'
 
 const parents = ref([])
@@ -71,6 +97,9 @@ const linkSel = reactive({})
 const saving = ref(false)
 const msg = ref('')
 const msgType = ref('ok')
+const showEditParent = ref(false)
+const editParentForm = ref({ id: '', account: '', name: '', password: '', studentIds: [] })
+const editLoading = ref(false)
 
 function setMsg(t, type = 'ok') { msg.value = t; msgType.value = type; setTimeout(() => (msg.value = ''), 4000) }
 
@@ -105,6 +134,36 @@ async function doLink(parentId, studentId) {
   } catch (e) { setMsg(e.message, 'err') }
 }
 
+function openEditParent(p) {
+  editParentForm.value = {
+    id: p.id, account: p.account, name: p.name, password: '',
+    studentIds: (p.children || []).map(c => c.id)
+  }
+  showEditParent.value = true
+}
+async function doEditParent() {
+  const f = editParentForm.value
+  if (!f.name) { setMsg('姓名为必填', 'err'); return }
+  editLoading.value = true
+  try {
+    const payload = { name: f.name }
+    if (f.password) payload.resetPassword = f.password
+    payload.studentIds = f.studentIds || []
+    const r = await updateParent(f.id, payload)
+    if (r.ok) { setMsg('家长信息已更新', 'ok'); showEditParent.value = false; load() }
+    else setMsg((r.data && r.data.error) || '更新失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+  editLoading.value = false
+}
+async function askDeleteParent(p) {
+  if (!confirm(`确认删除家长 ${p.name}（${p.account}）？将同时解除其孩子关联。`)) return
+  try {
+    const r = await deleteParent(p.id)
+    if (r.ok) { setMsg('已删除', 'ok'); load() }
+    else setMsg((r.data && r.data.error) || '删除失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+}
+
 onMounted(load)
 </script>
 
@@ -128,6 +187,16 @@ onMounted(load)
 .tbl th { color: var(--muted); font-weight: 600; }
 .tag { display: inline-block; background: var(--bg); color: var(--primary); border-radius: 6px; padding: 2px 8px; margin: 2px 4px 2px 0; font-size: 12px; }
 .sel-sm { padding: 5px 8px; border: 1.5px solid #e0e4ea; border-radius: 7px; font-size: 12px; outline: none; max-width: 180px; }
+.ops { vertical-align: top; }
+.op-row { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; align-items: center; }
+.btn.danger { background: var(--danger); }
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4); display: flex;
+  align-items: center; justify-content: center; z-index: 100;
+}
+.modal { background: #fff; border-radius: 12px; padding: 24px; width: 380px; max-width: 92vw; box-shadow: 0 8px 40px rgba(0,0,0,0.2); }
+.modal h3 { margin-bottom: 16px; color: var(--primary); }
+.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; }
 .msg { padding: 10px 16px; border-radius: 8px; margin: 12px 0; font-size: 14px; }
 .msg.ok { background: #e8f6ef; color: var(--primary); }
 .msg.err { background: #fbe9e9; color: var(--danger); }

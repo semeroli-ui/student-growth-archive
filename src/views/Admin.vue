@@ -45,6 +45,10 @@
               <div class="sub">{{ s.className }}</div>
             </div>
             <span class="badge" :class="{ warn: s.homeworkRate < 0.9 }">作业 {{ Math.round(s.homeworkRate * 100) }}%</span>
+            <div class="card-actions no-print">
+              <button class="btn outline sm" @click.stop="openEditStudent(s)">编辑</button>
+              <button class="btn danger sm" @click.stop="askDeleteStudent(s)">删除</button>
+            </div>
           </div>
           <div v-if="!students.length" class="empty">暂无学生，点击「单条添加」或「批量导入」</div>
         </div>
@@ -60,7 +64,7 @@
         </div>
         <table class="tbl">
           <thead>
-            <tr><th>工号</th><th>姓名</th><th>角色</th><th>班级</th><th>状态</th></tr>
+            <tr><th>工号</th><th>姓名</th><th>角色</th><th>班级</th><th>状态</th><th>操作</th></tr>
           </thead>
           <tbody>
             <tr v-for="t in teachers" :key="t.id">
@@ -69,6 +73,10 @@
               <td>{{ t.role === 'admin' ? '管理员' : '教师' }}</td>
               <td>{{ t.class_name }}</td>
               <td>{{ t.status === 'active' ? '正常' : t.status }}</td>
+              <td>
+                <button class="btn outline sm" @click="openEditTeacher(t)">编辑</button>
+                <button class="btn danger sm" @click="askDeleteTeacher(t)">删除</button>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -133,16 +141,49 @@
         </div>
       </div>
     </div>
+
+    <!-- ============ 编辑学生 模态 ============ -->
+    <div v-if="showEditStudent" class="modal-mask" @click.self="showEditStudent = false">
+      <div class="modal">
+        <h3>编辑学生</h3>
+        <div class="field"><label>学号</label><input :value="editStudentForm.id" class="input" disabled /></div>
+        <div class="field"><label>姓名 *</label><input v-model="editStudentForm.name" class="input" /></div>
+        <div class="field"><label>班级 *</label><input v-model="editStudentForm.className" class="input" /></div>
+        <div class="field"><label>重置密码（留空则不修改）</label><input v-model="editStudentForm.password" class="input" type="password" placeholder="留空不改" /></div>
+        <div class="modal-actions">
+          <button class="btn outline" @click="showEditStudent = false">取消</button>
+          <button class="btn" :disabled="editLoading" @click="doEditStudent">{{ editLoading ? '保存中…' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============ 编辑教师 模态 ============ -->
+    <div v-if="showEditTeacher" class="modal-mask" @click.self="showEditTeacher = false">
+      <div class="modal">
+        <h3>编辑教师/管理员</h3>
+        <div class="field"><label>工号</label><input :value="editTeacherForm.id" class="input" disabled /></div>
+        <div class="field"><label>姓名 *</label><input v-model="editTeacherForm.name" class="input" /></div>
+        <div class="field"><label>角色 *</label>
+          <select v-model="editTeacherForm.role" class="select"><option value="teacher">教师</option><option value="admin">管理员</option></select>
+        </div>
+        <div class="field"><label>负责班级 *</label><input v-model="editTeacherForm.className" class="input" /></div>
+        <div class="field"><label>重置密码（留空则不修改）</label><input v-model="editTeacherForm.password" class="input" type="password" placeholder="留空不改" /></div>
+        <div class="modal-actions">
+          <button class="btn outline" @click="showEditTeacher = false">取消</button>
+          <button class="btn" :disabled="editTeacherLoading" @click="doEditTeacher">{{ editTeacherLoading ? '保存中…' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getRole, getMustChangePwd, changePassword } from '../api/auth.js'
+import { getRole, getMustChangePwd, changePassword, updateTeacher, deleteTeacher } from '../api/auth.js'
 import InviteManager from '../components/InviteManager.vue'
 import ParentManager from '../components/ParentManager.vue'
-import { getStudents, getClassrooms, createStudent, importStudents, getTeachers, createTeacher } from '../api/student.js'
+import { getStudents, getClassrooms, createStudent, importStudents, getTeachers, createTeacher, updateStudent, deleteStudent } from '../api/student.js'
 
 const route = useRoute()
 const isAdmin = getRole() === 'admin'
@@ -163,6 +204,14 @@ const showAddTeacher = ref(false)
 const addLoading = ref(false)
 const tLoading = ref(false)
 const pwdLoading = ref(false)
+
+// 编辑/删除
+const showEditStudent = ref(false)
+const editStudentForm = ref({ id: '', name: '', className: '', password: '' })
+const editLoading = ref(false)
+const showEditTeacher = ref(false)
+const editTeacherForm = ref({ id: '', name: '', className: '', role: 'teacher', password: '' })
+const editTeacherLoading = ref(false)
 
 const form = ref({ account: '', name: '', className: '', password: '' })
 const tForm = ref({ account: '', name: '', password: '', role: 'teacher', className: '' })
@@ -252,6 +301,60 @@ async function doAddTeacher() {
   tLoading.value = false
 }
 
+// ===== 学生编辑/删除（教师/管理员）=====
+function openEditStudent(s) {
+  editStudentForm.value = { id: s.id, name: s.name, className: s.className, password: '' }
+  showEditStudent.value = true
+}
+async function doEditStudent() {
+  const f = editStudentForm.value
+  if (!f.name || !f.className) { setMsg('姓名、班级为必填', 'err'); return }
+  editLoading.value = true
+  try {
+    const payload = { name: f.name, className: f.className }
+    if (f.password) payload.resetPassword = f.password
+    const r = await updateStudent(f.id, payload)
+    if (r.success) { setMsg('学生信息已更新', 'ok'); showEditStudent.value = false; loadStudents() }
+    else setMsg(r.error || '更新失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+  editLoading.value = false
+}
+async function askDeleteStudent(s) {
+  if (!confirm(`确认删除学生 ${s.name}（${s.id}）？将同时删除其成绩、行为、事件等全部数据。`)) return
+  try {
+    const r = await deleteStudent(s.id)
+    if (r.success) { setMsg('已删除', 'ok'); loadStudents() }
+    else setMsg(r.error || '删除失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+}
+
+// ===== 教师编辑/删除（管理员）=====
+function openEditTeacher(t) {
+  editTeacherForm.value = { id: t.id, name: t.name, className: t.class_name, role: t.role || 'teacher', password: '' }
+  showEditTeacher.value = true
+}
+async function doEditTeacher() {
+  const f = editTeacherForm.value
+  if (!f.name || !f.className) { setMsg('姓名、班级为必填', 'err'); return }
+  editTeacherLoading.value = true
+  try {
+    const payload = { name: f.name, className: f.className, role: f.role }
+    if (f.password) payload.resetPassword = f.password
+    const r = await updateTeacher(f.id, payload)
+    if (r.ok) { setMsg('教师信息已更新', 'ok'); showEditTeacher.value = false; loadTeachers() }
+    else setMsg((r.data && r.data.error) || '更新失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+  editTeacherLoading.value = false
+}
+async function askDeleteTeacher(t) {
+  if (!confirm(`确认删除教师/管理员 ${t.name}（${t.account}）？`)) return
+  try {
+    const r = await deleteTeacher(t.id)
+    if (r.ok) { setMsg('已删除', 'ok'); loadTeachers() }
+    else setMsg((r.data && r.data.error) || '删除失败', 'err')
+  } catch (e) { setMsg(e.message, 'err') }
+}
+
 async function doChangePwd() {
   if (!oldPwd.value || !newPwd.value) { setMsg('请填写完整', 'err'); return }
   if (newPwd.value.length < 6) { setMsg('新密码至少 6 位', 'err'); return }
@@ -311,4 +414,9 @@ watch(() => route.query.tab, (t) => { if (t) tab.value = t })
 .modal { background: #fff; border-radius: 12px; padding: 24px; width: 380px; max-width: 92vw; box-shadow: 0 8px 40px rgba(0,0,0,0.2); }
 .modal h3 { margin-bottom: 16px; color: var(--primary); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.btn.sm { padding: 5px 10px; font-size: 12px; }
+.btn.danger { background: var(--danger); }
+.btn.danger:hover { opacity: 0.9; }
+.student-card { flex-wrap: wrap; }
+.card-actions { flex-basis: 100%; display: flex; gap: 6px; margin-top: 6px; }
 </style>

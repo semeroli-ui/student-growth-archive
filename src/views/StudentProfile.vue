@@ -37,6 +37,21 @@
       </div>
     </div>
 
+    <!-- 添加成绩（教师/管理员） -->
+    <div v-if="isStaff" class="card no-print">
+      <h2>添加成绩</h2>
+      <div class="score-form">
+        <select v-model="scoreForm.subject" class="select">
+          <option value="">选择科目</option>
+          <option v-for="s in subjects" :key="s" :value="s">{{ s }}</option>
+        </select>
+        <input v-model="scoreForm.exam_name" class="input" placeholder="考试名称，如 期中" />
+        <input v-model="scoreForm.score" class="input" type="number" placeholder="分数" />
+        <button class="btn primary" :disabled="scoreLoading" @click="doAddScore">{{ scoreLoading ? '提交中…' : '添加' }}</button>
+      </div>
+      <p v-if="scoreMsg" :class="['msg', scoreMsgType]">{{ scoreMsg }}</p>
+    </div>
+
     <!-- AI 报告 -->
     <div class="card">
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -97,7 +112,8 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getStudent, generateAIReport } from '../api/student.js'
+import { getStudent, generateAIReport, getSubjects, addScore } from '../api/student.js'
+import { getRole } from '../api/auth.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
 
@@ -108,10 +124,17 @@ const aiReport = ref(null)
 const aiLoading = ref(false)
 const aiSource = ref('')
 const aiError = ref('')
+const subjects = ref([])
+const isStaff = getRole() === 'teacher' || getRole() === 'admin'
+const scoreForm = ref({ subject: '', exam_name: '', score: '' })
+const scoreLoading = ref(false)
+const scoreMsg = ref('')
+const scoreMsgType = ref('ok')
 
 onMounted(async () => {
   student.value = await getStudent(route.params.id)
   loading.value = false
+  try { subjects.value = await getSubjects() } catch (e) {}
   // 初始展示已有报告
   if (student.value?.aiReport) {
     aiReport.value = student.value.aiReport
@@ -142,6 +165,22 @@ async function regenerateAI() {
   } finally {
     aiLoading.value = false
   }
+}
+
+async function doAddScore() {
+  const f = scoreForm.value
+  if (!f.subject || !f.exam_name || f.score === '') { scoreMsg.value = '请填写科目、考试名称与分数'; scoreMsgType.value = 'err'; return }
+  scoreLoading.value = true
+  scoreMsg.value = ''
+  try {
+    const r = await addScore(student.value.id, { subject: f.subject, exam_name: f.exam_name, score: Number(f.score) })
+    if (r.success) {
+      scoreMsg.value = '成绩已添加'; scoreMsgType.value = 'ok'
+      f.subject = ''; f.exam_name = ''; f.score = ''
+      student.value = await getStudent(student.value.id)
+    } else { scoreMsg.value = r.error || '添加失败'; scoreMsgType.value = 'err' }
+  } catch (e) { scoreMsg.value = e.message; scoreMsgType.value = 'err' }
+  scoreLoading.value = false
 }
 
 async function exportPDF() {
@@ -176,4 +215,13 @@ async function exportPDF() {
   0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
   40% { transform: scale(1); opacity: 1; }
 }
+.score-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.score-form .select, .score-form .input {
+  padding: 9px 12px; border: 1.5px solid #e0e4ea; border-radius: 8px; font-size: 14px;
+  color: var(--text); background: #fff; outline: none;
+}
+.score-form .input { width: 150px; }
+.msg { padding: 10px 16px; border-radius: 8px; margin-top: 12px; font-size: 14px; }
+.msg.ok { background: #e8f6ef; color: var(--primary); }
+.msg.err { background: #fbe9e9; color: var(--danger); }
 </style>

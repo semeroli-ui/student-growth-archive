@@ -84,6 +84,17 @@ async function requireParent(request, env) {
   return { user, response: null }
 }
 
+// ===== 科目库（覆盖小学到高中常见科目）=====
+const SUBJECTS = [
+  '语文', '数学', '英语', '音乐', '美术', '体育', '道法', '科学',
+  '物理', '化学', '生物', '历史', '地理', '政治', '信息技术', '通用技术'
+]
+
+// 科目列表（公开元数据）
+async function handleListSubjects() {
+  return jsonResp(SUBJECTS)
+}
+
 // ===== D1 查询函数 =====
 
 async function dbGetStudents(env, className) {
@@ -181,6 +192,105 @@ async function dbGetStudent(env, id) {
 }
 
 // ===== Handler 函数 =====
+
+// ===== 账号 CRUD（编辑/删除）=====
+
+// 编辑学生（教师/管理员）
+async function handleUpdateStudent(request, env, actor, id) {
+  const { name, className, resetPassword } = await request.json()
+  if (!name || !className) return jsonResp({ error: '姓名、班级为必填' }, 400)
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(id).first()
+  if (!exists) return jsonResp({ error: '学生不存在' }, 404)
+
+  const normalizedClass = normalizeClassName(className)
+  await env.DB.prepare(`UPDATE users SET name = ?, class_name = ?, updated_at = datetime('now') WHERE id = ?`)
+    .bind(name, normalizedClass, id).run()
+
+  if (resetPassword) {
+    const newPwd = String(resetPassword).trim()
+    if (newPwd.length < 6) return jsonResp({ error: '新密码至少 6 位' }, 400)
+    const hash = await sha256(newPwd)
+    await env.DB.prepare(`UPDATE users SET password_hash = ?, must_change_pwd = 1 WHERE id = ?`).bind(hash, id).run()
+  }
+  return jsonResp({ success: true })
+}
+
+// 删除学生（教师/管理员，级联删除关联数据）
+async function handleDeleteStudent(request, env, actor, id) {
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(id).first()
+  if (!exists) return jsonResp({ error: '学生不存在' }, 404)
+  await env.DB.prepare(`DELETE FROM scores WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM behavior WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM homework WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM events WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM ai_reports WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM parent_links WHERE student_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run()
+  return jsonResp({ success: true })
+}
+
+// 编辑教师（管理员）
+async function handleUpdateTeacher(request, env, admin, id) {
+  const { name, className, role, resetPassword } = await request.json()
+  if (!name || !className) return jsonResp({ error: '姓名、班级为必填' }, 400)
+  const r = (role === 'admin') ? 'admin' : 'teacher'
+  if (id === admin.id && r !== 'admin') {
+    return jsonResp({ error: '不能将自身降级为教师' }, 400)
+  }
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role IN ('teacher','admin')`).bind(id).first()
+  if (!exists) return jsonResp({ error: '教师不存在' }, 404)
+  const normalizedClass = normalizeClassName(className)
+  await env.DB.prepare(`UPDATE users SET name = ?, class_name = ?, role = ?, updated_at = datetime('now') WHERE id = ?`)
+    .bind(name, normalizedClass, r, id).run()
+  if (resetPassword) {
+    const newPwd = String(resetPassword).trim()
+    if (newPwd.length < 6) return jsonResp({ error: '新密码至少 6 位' }, 400)
+    const hash = await sha256(newPwd)
+    await env.DB.prepare(`UPDATE users SET password_hash = ?, must_change_pwd = 1 WHERE id = ?`).bind(hash, id).run()
+  }
+  return jsonResp({ success: true })
+}
+
+// 删除教师（管理员）
+async function handleDeleteTeacher(request, env, admin, id) {
+  if (id === admin.id) return jsonResp({ error: '不能删除当前登录账号' }, 400)
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role IN ('teacher','admin')`).bind(id).first()
+  if (!exists) return jsonResp({ error: '教师不存在' }, 404)
+  await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run()
+  return jsonResp({ success: true })
+}
+
+// 编辑家长（教师/管理员）
+async function handleUpdateParent(request, env, actor, id) {
+  const { name, resetPassword, studentIds } = await request.json()
+  if (!name) return jsonResp({ error: '姓名为必填' }, 400)
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'parent'`).bind(id).first()
+  if (!exists) return jsonResp({ error: '家长不存在' }, 404)
+  await env.DB.prepare(`UPDATE users SET name = ?, updated_at = datetime('now') WHERE id = ?`).bind(name, id).run()
+  if (resetPassword) {
+    const newPwd = String(resetPassword).trim()
+    if (newPwd.length < 6) return jsonResp({ error: '新密码至少 6 位' }, 400)
+    const hash = await sha256(newPwd)
+    await env.DB.prepare(`UPDATE users SET password_hash = ?, must_change_pwd = 1 WHERE id = ?`).bind(hash, id).run()
+  }
+  if (Array.isArray(studentIds)) {
+    await env.DB.prepare(`DELETE FROM parent_links WHERE parent_id = ?`).bind(id).run()
+    for (const sid of studentIds) {
+      await env.DB.prepare(`INSERT OR IGNORE INTO parent_links (id, parent_id, student_id) VALUES (?, ?, ?)`)
+        .bind('PL_' + randomToken().slice(0, 10), id, sid).run()
+    }
+  }
+  return jsonResp({ success: true })
+}
+
+// 删除家长（教师/管理员，级联 parent_links）
+async function handleDeleteParent(request, env, actor, id) {
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'parent'`).bind(id).first()
+  if (!exists) return jsonResp({ error: '家长不存在' }, 404)
+  await env.DB.prepare(`DELETE FROM parent_links WHERE parent_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(id).run()
+  return jsonResp({ success: true })
+}
 
 async function handleLogin(request, env) {
   const { account, password } = await request.json()
@@ -640,6 +750,16 @@ export async function onRequest(context) {
   if (path === '/health' || path === '/') {
     return jsonResp({ status: 'ok', source: 'pages-functions', time: new Date().toISOString() })
   }
+  // 科目库（公开元数据）
+  if (path === '/subjects' && method === 'GET') {
+    return handleListSubjects()
+  }
+  // KV 诊断
+  if (path === '/debug/kv' && method === 'GET') {
+    const kvTest = await env.SESSIONS?.put('__kv_test__', 'ok', { expirationTtl: 60 })
+    const kvGet = await env.SESSIONS?.get('__kv_test__')
+    return jsonResp({ env: typeof env, dbType: typeof env?.DB, sessionsType: typeof env?.SESSIONS, kvPut: kvTest, kvGet })
+  }
 
   // 需要登录
   const { user, response } = await requireAuth(request, env)
@@ -661,7 +781,8 @@ export async function onRequest(context) {
     const className = user.role === 'student'
       ? user.className
       : (url.searchParams.get('class') || user.className)
-    return jsonResp(await dbGetStudents(env, className))
+    const students = await dbGetStudents(env, className)
+    return jsonResp(students)
   }
 
   // 单条添加学生
@@ -669,6 +790,19 @@ export async function onRequest(context) {
     const { user: t, response: r } = await requireTeacher(request, env)
     if (r) return r
     return handleCreateStudent(request, env, t)
+  }
+
+  // 编辑学生
+  if (path.match(/^\/students\/[^/]+$/) && method === 'PUT') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleUpdateStudent(request, env, t, path.split('/')[2])
+  }
+  // 删除学生
+  if (path.match(/^\/students\/[^/]+$/) && method === 'DELETE') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleDeleteStudent(request, env, t, path.split('/')[2])
   }
 
   // 批量导入
@@ -742,6 +876,18 @@ export async function onRequest(context) {
     if (r) return r
     return handleCreateParent(request, env, t)
   }
+  // 编辑家长
+  if (path.match(/^\/admin\/parents\/[^/]+$/) && method === 'PUT') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleUpdateParent(request, env, t, path.split('/')[3])
+  }
+  // 删除家长
+  if (path.match(/^\/admin\/parents\/[^/]+$/) && method === 'DELETE') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleDeleteParent(request, env, t, path.split('/')[3])
+  }
   if (path === '/admin/parent-links' && method === 'POST') {
     const { user: t, response: r } = await requireTeacher(request, env)
     if (r) return r
@@ -758,6 +904,18 @@ export async function onRequest(context) {
     const { user: a, response: r } = await requireAdmin(request, env)
     if (r) return r
     return handleCreateTeacher(request, env, a)
+  }
+  // 编辑教师
+  if (path.match(/^\/admin\/teachers\/[^/]+$/) && method === 'PUT') {
+    const { user: a, response: r } = await requireAdmin(request, env)
+    if (r) return r
+    return handleUpdateTeacher(request, env, a, path.split('/')[3])
+  }
+  // 删除教师
+  if (path.match(/^\/admin\/teachers\/[^/]+$/) && method === 'DELETE') {
+    const { user: a, response: r } = await requireAdmin(request, env)
+    if (r) return r
+    return handleDeleteTeacher(request, env, a, path.split('/')[3])
   }
 
   // 修正全角 className
