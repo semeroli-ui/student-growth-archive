@@ -53,7 +53,7 @@
           <p>请使用您的账号登录</p>
         </div>
 
-        <!-- 角色切换 -->
+        <!-- 角色切换：账号类型决定登录后跳转方向（实际权限以服务端返回为准） -->
         <div class="role-switch">
           <button
             :class="['role-btn', { active: role === 'teacher' }]"
@@ -67,6 +67,12 @@
           >
             <span class="role-emoji">🎓</span> 学生登录
           </button>
+          <button
+            :class="['role-btn', { active: role === 'parent' }]"
+            @click="role = 'parent'"
+          >
+            <span class="role-emoji">👪</span> 家长登录
+          </button>
         </div>
 
         <form @submit.prevent="handleLogin">
@@ -79,7 +85,7 @@
               <input
                 v-model="account"
                 type="text"
-                :placeholder="role === 'teacher' ? '教师工号或手机号' : '学号或手机号'"
+                :placeholder="role === 'teacher' ? '教师工号或手机号' : role === 'student' ? '学号或手机号' : '家长账号'"
                 autocomplete="username"
                 required
               />
@@ -130,13 +136,16 @@
           <span class="sec-badge">✅ D1 数据库</span>
           <span class="sec-badge">⚡ Cloudflare 边缘</span>
         </div>
+        <div class="reg-link">
+          教师还没有账号？<router-link to="/register">使用邀请码自助注册</router-link>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { login } from '../api/auth.js'
 
@@ -165,7 +174,10 @@ async function handleLogin() {
         sessionStorage.setItem('sga_role', result.role)
         sessionStorage.setItem('sga_user', JSON.stringify(result.user))
       }
-      router.push('/app')
+      let target = '/app'
+      if (result.role === 'parent') target = '/parent'
+      else if (result.user && result.user.mustChangePwd) target = '/admin?tab=pwd'
+      router.push(target)
     } else {
       errorMsg.value = result.error || '登录失败，请检查账号密码'
     }
@@ -483,6 +495,21 @@ function handleForgot() {
 .sec-badge {
   font-size: 11px;
   color: var(--muted);
+}
+
+/* 注册链接 */
+.reg-link {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+.reg-link a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.reg-link a:hover {
+  text-decoration: underline;
 }
 
 /* === 响应式 === */
