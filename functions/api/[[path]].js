@@ -110,7 +110,7 @@ async function dbGetStudents(env, className) {
   const students = []
   for (const s of results) {
     const lastExam = await env.DB.prepare(
-      `SELECT exam_name, subject, score FROM scores WHERE student_id = ? ORDER BY id DESC LIMIT 3`
+      `SELECT exam_name, subject, score, images FROM scores WHERE student_id = ? ORDER BY id DESC LIMIT 3`
     ).bind(s.id).all()
 
     const homework = await env.DB.prepare(
@@ -142,13 +142,14 @@ async function dbGetStudent(env, id) {
   if (!user) return null
 
   const { results: scoreRows } = await env.DB.prepare(
-    `SELECT exam_name, subject, score FROM scores WHERE student_id = ? ORDER BY id`
+    `SELECT exam_name, subject, score, images FROM scores WHERE student_id = ? ORDER BY id`
   ).bind(id).all()
 
   const examMap = {}
   for (const r of scoreRows) {
-    if (!examMap[r.exam_name]) examMap[r.exam_name] = { exam: r.exam_name }
+    if (!examMap[r.exam_name]) examMap[r.exam_name] = { exam: r.exam_name, _images: {} }
     examMap[r.exam_name][r.subject] = r.score
+    try { examMap[r.exam_name]._images[r.subject] = JSON.parse(r.images || '[]') } catch { examMap[r.exam_name]._images[r.subject] = [] }
   }
   const scores = Object.values(examMap)
 
@@ -701,11 +702,12 @@ async function handleAIReport(request, env, user) {
 }
 
 async function handleAddScore(request, env, studentId) {
-  const { exam_name, subject, score } = await request.json()
+  const { exam_name, subject, score, images } = await request.json()
   if (!exam_name || !subject || score === undefined) return jsonResp({ error: '缺少参数' }, 400)
+  const imagesJson = Array.isArray(images) ? JSON.stringify(images.slice(0, 3)) : '[]'
   await env.DB.prepare(
-    `INSERT OR REPLACE INTO scores (student_id, exam_name, subject, score) VALUES (?, ?, ?, ?)`
-  ).bind(studentId, exam_name, subject, score).run()
+    `INSERT OR REPLACE INTO scores (student_id, exam_name, subject, score, images) VALUES (?, ?, ?, ?, ?)`
+  ).bind(studentId, exam_name, subject, score, imagesJson).run()
   return jsonResp({ success: true })
 }
 

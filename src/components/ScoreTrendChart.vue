@@ -6,7 +6,10 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import * as echarts from 'echarts'
 
-const props = defineProps({ scores: { type: Array, required: true } })
+const props = defineProps({
+  scores: { type: Array, required: true }
+})
+const emit = defineEmits(['exam-click'])
 const el = ref(null)
 let chart = null
 
@@ -22,13 +25,17 @@ onMounted(() => {
     data: props.scores.map(s => s[sub]),
     itemStyle: { color: colors[sub] }
   }))
-  chart.setOption({
+  const option = {
     tooltip: { trigger: 'axis' },
     legend: { data: subjects, bottom: 0 },
     grid: { left: 36, right: 16, top: 20, bottom: 40 },
     xAxis: { type: 'category', data: exams },
     yAxis: { type: 'value', min: 40, max: 100 },
     series
+  }
+  chart.setOption(option)
+  chart.on('click', params => {
+    if (params.name) emit('exam-click', { exam: params.name })
   })
   window.addEventListener('resize', () => chart && chart.resize())
 })
