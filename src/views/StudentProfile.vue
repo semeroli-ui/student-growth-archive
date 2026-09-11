@@ -180,24 +180,59 @@ const previewSrc = ref('')
 
 // ========== 成绩附件 ==========
 const MAX_IMGS = 3
-const MAX_SIZE = 200 * 1024 // 200KB
+const MAX_SIZE = 1 * 1024 * 1024 // 1MB 压缩后上限
+const MAX_WIDTH = 1600 // 缩放上限
 
-function onImgChange(e) {
+async function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('读取失败'))
+    reader.onload = ev => {
+      const img = new Image()
+      img.onerror = () => reject(new Error('解码失败'))
+      img.onload = () => {
+        let { width, height } = img
+        if (width > MAX_WIDTH) {
+          height = Math.round(height * (MAX_WIDTH / width))
+          width = MAX_WIDTH
+        }
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(img, 0, 0, width, height)
+        try {
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.75)
+          resolve(dataUrl)
+        } catch (e) { reject(e) }
+      }
+      img.src = ev.target.result
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onImgChange(e) {
   const files = Array.from(e.target.files || [])
+  scoreMsg.value = ''
   for (const file of files) {
     if (scoreForm.value.images.length >= MAX_IMGS) break
     if (!file.type.startsWith('image/')) continue
-    const reader = new FileReader()
-    reader.onload = ev => {
-      const src = ev.target.result
+    try {
+      const src = await compressImage(file)
       if (src.length > MAX_SIZE) {
-        scoreMsg.value = `图片 "${file.name}" 超过 200KB，请压缩后重试`
+        scoreMsg.value = `"${file.name}" 仍超过 1MB，请选更小的图`
         scoreMsgType.value = 'err'
-        return
+        continue
       }
-      scoreForm.value.images.push({ src, name: file.name })
+      const kb = Math.round(src.length / 1024)
+      scoreForm.value.images.push({ src, name: `${file.name} (${kb}KB)` })
+      scoreMsg.value = `已压缩 ${file.name} → ${kb}KB`
+      scoreMsgType.value = 'ok'
+    } catch (err) {
+      scoreMsg.value = `"${file.name}" 压缩失败：${err.message}`
+      scoreMsgType.value = 'err'
     }
-    reader.readAsDataURL(file)
   }
   e.target.value = ''
 }
