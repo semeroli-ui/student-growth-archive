@@ -73,7 +73,8 @@
       </div>
 
       <div v-else>
-        <p>{{ aiReport.profile }}</p>
+        <p v-if="aiReport && aiReport.profile">{{ aiReport.profile }}</p>
+        <p v-else style="color:var(--muted)">尚未生成 AI 报告，可点击右上角「重新生成」。</p>
         <div v-if="aiReport.weaknesses && aiReport.weaknesses.length" style="margin-top:12px">
           <strong class="weakness">薄弱点：</strong>
           <ul>
@@ -120,7 +121,7 @@ import BehaviorRadar from '../components/BehaviorRadar.vue'
 const route = useRoute()
 const student = ref(null)
 const loading = ref(true)
-const aiReport = ref(null)
+const aiReport = ref({})
 const aiLoading = ref(false)
 const aiSource = ref('')
 const aiError = ref('')
@@ -151,7 +152,7 @@ async function regenerateAI() {
     if (result?.error) {
       aiError.value = result.error
     } else {
-      aiReport.value = result
+      aiReport.value = result || {}
       aiSource.value = result._source || 'ai'
       if (result._error) aiError.value = 'AI 服务异常，已使用预置报告兜底'
     }
