@@ -152,3 +152,27 @@ export async function addScore(studentId, payload) {
   }
   return { success: true }
 }
+
+// payload: { event_date, event_type, content }
+export async function addEvent(studentId, payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/student/${studentId}/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}
+
+// payload: { event_date, event_type, content }
+export async function deleteEvent(studentId, payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/student/${studentId}/event`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}

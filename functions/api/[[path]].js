@@ -721,6 +721,15 @@ async function handleAddEvent(request, env, studentId) {
   return jsonResp({ success: true })
 }
 
+async function handleDeleteEvent(request, env, studentId) {
+  const { event_date, event_type, content } = await request.json()
+  if (!event_date || !event_type || !content) return jsonResp({ error: '缺少参数' }, 400)
+  await env.DB.prepare(
+    `DELETE FROM events WHERE student_id = ? AND event_date = ? AND event_type = ? AND content = ?`
+  ).bind(studentId, event_date, event_type, content).run()
+  return jsonResp({ success: true })
+}
+
 // ===== 主入口 =====
 export async function onRequest(context) {
   const { request, env } = context
@@ -849,6 +858,11 @@ export async function onRequest(context) {
     const { user: teacher, response: r } = await requireTeacher(request, env)
     if (r) return r
     return handleAddEvent(request, env, path.split('/')[2])
+  }
+  if (path.match(/^\/student\/[^/]+\/event$/) && method === 'DELETE') {
+    const { user: teacher, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleDeleteEvent(request, env, path.split('/')[2])
   }
 
   // 邀请码管理

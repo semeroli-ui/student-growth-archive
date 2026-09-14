@@ -143,9 +143,26 @@
     <!-- 时间线 -->
     <div class="card">
       <h2>成长时间线</h2>
+      <!-- 教师添加事件 -->
+      <div v-if="isStaff" class="event-form">
+        <input v-model="eventForm.event_date" type="date" class="input" />
+        <select v-model="eventForm.event_type" class="select">
+          <option>奖励</option>
+          <option>惩罚</option>
+          <option>比赛</option>
+          <option>活动</option>
+          <option>提醒</option>
+          <option>其他</option>
+        </select>
+        <input v-model="eventForm.content" type="text" class="input" placeholder="记录内容" style="flex:1; min-width:160px" />
+        <button class="btn-primary btn-sm" :disabled="eventLoading" @click="doAddEvent">添加</button>
+      </div>
+      <div v-if="eventMsg" class="msg" :class="eventMsgType">{{ eventMsg }}</div>
       <div class="timeline">
         <div v-for="(e, i) in student.events" :key="i" class="timeline-item">
-          <div class="date">{{ e.date }} · <span class="badge" :class="{ warn: e.type==='提醒' }">{{ e.type }}</span></div>
+          <div class="date">{{ e.date }} · <span class="badge" :class="{ warn: e.type==='提醒' }">{{ e.type }}</span>
+            <button v-if="isStaff" class="del-btn" @click="doDeleteEvent(i)" title="删除">×</button>
+          </div>
           <div>{{ e.content }}</div>
         </div>
       </div>
@@ -156,7 +173,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getStudent, generateAIReport, getSubjects, addScore } from '../api/student.js'
+import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent } from '../api/student.js'
 import { getRole } from '../api/auth.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
@@ -177,6 +194,10 @@ const scoreMsgType = ref('ok')
 const showExamModal = ref(false)
 const examDetail = ref({ exam: '', scores: {}, images: {}, imagesCount: 0 })
 const previewSrc = ref('')
+const eventForm = ref({ event_date: '', event_type: '奖励', content: '' })
+const eventMsg = ref('')
+const eventMsgType = ref('ok')
+const eventLoading = ref(false)
 
 // ========== 成绩附件 ==========
 const MAX_IMGS = 3
@@ -331,6 +352,36 @@ async function exportPDF() {
   await nextTick()
   window.print()
 }
+
+async function doAddEvent() {
+  const f = eventForm.value
+  if (!f.event_date || !f.event_type || !f.content.trim()) {
+    eventMsg.value = '请填写日期、类型和内容'; eventMsgType.value = 'err'; return
+  }
+  eventLoading.value = true; eventMsg.value = ''
+  try {
+    const r = await addEvent(student.value.id, {
+      event_date: f.event_date, event_type: f.event_type, content: f.content.trim()
+    })
+    if (r.success) {
+      eventMsg.value = '已添加'; eventMsgType.value = 'ok'
+      f.event_date = ''; f.event_type = '奖励'; f.content = ''
+      student.value = await getStudent(student.value.id)
+    } else { eventMsg.value = r.error || '添加失败'; eventMsgType.value = 'err' }
+  } catch (e) { eventMsg.value = e.message; eventMsgType.value = 'err' }
+  eventLoading.value = false
+}
+
+async function doDeleteEvent(i) {
+  if (!confirm('确认删除这条记录？')) return
+  const e = student.value.events[i]
+  const r = await deleteEvent(student.value.id, {
+    event_date: e.date, event_type: e.type, content: e.content
+  })
+  if (r.success) {
+    student.value = await getStudent(student.value.id)
+  }
+}
 </script>
 
 <style scoped>
@@ -385,4 +436,17 @@ async function exportPDF() {
 .exam-img-grid { display: flex; gap: 8px; flex-wrap: wrap; }
 .exam-img { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; cursor: zoom-in; border: 1px solid #e0e4ea; }
 .preview-img { max-width: 95vw; max-height: 95vh; border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,0.4); }
+
+/* 时间线事件管理 */
+.event-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.event-form .select, .event-form .input {
+  padding: 7px 10px; border: 1.5px solid #e0e4ea; border-radius: 8px; font-size: 13px;
+  color: var(--text); background: #fff; outline: none;
+}
+.del-btn {
+  margin-left: 8px; background: none; border: none; cursor: pointer; color: #ccc;
+  font-size: 16px; padding: 0 2px; line-height: 1; vertical-align: middle;
+  transition: color 0.15s;
+}
+.del-btn:hover { color: #ef4444; }
 </style>
