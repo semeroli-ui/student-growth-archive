@@ -661,7 +661,8 @@ async function handleAIReport(request, env, user) {
   }
 
   try {
-    const resp = await fetch(`${env.AGNES_BASE_URL}/chat/completions`, {
+    const agnesUrl = env.AGNES_BASE_URL || 'https://apihub.agnes-ai.com/v1'
+  const resp = await fetch(`${agnesUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
