@@ -168,10 +168,9 @@ export async function addEvent(studentId, payload) {
 // payload: { event_date, event_type, content }
 export async function deleteEvent(studentId, payload) {
   if (USE_WORKER) {
-    return fetchJSON(`${API}/student/${studentId}/event`, {
-      method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+    const params = new URLSearchParams(payload).toString()
+    return fetchJSON(`${API}/student/${studentId}/event?${params}`, {
+      method: 'DELETE'
     })
   }
   return { success: true }

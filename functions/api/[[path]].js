@@ -722,7 +722,10 @@ async function handleAddEvent(request, env, studentId) {
 }
 
 async function handleDeleteEvent(request, env, studentId) {
-  const { event_date, event_type, content } = await request.json()
+  const url = new URL(request.url)
+  const event_date = url.searchParams.get('event_date')
+  const event_type = url.searchParams.get('event_type')
+  const content = url.searchParams.get('content')
   if (!event_date || !event_type || !content) return jsonResp({ error: '缺少参数' }, 400)
   await env.DB.prepare(
     `DELETE FROM events WHERE student_id = ? AND event_date = ? AND event_type = ? AND content = ?`
