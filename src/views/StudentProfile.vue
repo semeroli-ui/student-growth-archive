@@ -228,6 +228,12 @@ const behaviorForm = ref({ raise_hand: 0, focus: 0, cooperation: 0, homework_qua
 const behaviorMsg = ref('')
 const behaviorMsgType = ref('ok')
 const behaviorLoading = ref(false)
+const behaviorFields = {
+  raise_hand: '举手积极性',
+  focus: '专注度',
+  cooperation: '合作度',
+  homework_quality: '作业质量'
+}
 
 // ========== 成绩附件 ==========
 const MAX_IMGS = 3
