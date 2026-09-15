@@ -9,7 +9,6 @@
     <div class="card">
       <div class="tabs">
         <button :class="['tab', { active: tab === 'students' }]" @click="switchTab('students')">学生管理</button>
-        <button v-if="isStaff" :class="['tab', { active: tab === 'scores' }]" @click="switchTab('scores')">成绩导入</button>
         <button v-if="isAdmin" :class="['tab', { active: tab === 'teachers' }]" @click="switchTab('teachers')">教师管理</button>
         <button v-if="isAdmin" :class="['tab', { active: tab === 'invites' }]" @click="switchTab('invites')">邀请码管理</button>
         <button v-if="isStaff" :class="['tab', { active: tab === 'parents' }]" @click="switchTab('parents')">家长管理</button>
@@ -52,40 +51,6 @@
             </div>
           </div>
           <div v-if="!students.length" class="empty">暂无学生，点击「单条添加」或「批量导入」</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- ============ 成绩导入 ============ -->
-    <div v-show="tab === 'scores' && isStaff">
-      <div class="card">
-        <div class="row between">
-          <h2>批量导入成绩</h2>
-          <button class="btn outline" @click="downloadScoreTemplate">下载模板</button>
-        </div>
-        <div class="field" style="margin-top:16px">
-          <label>CSV 文件</label>
-          <input type="file" accept=".csv" @change="onScoreFile" class="input" style="padding:8px" />
-          <div style="font-size:12px;color:var(--muted);margin-top:6px">
-            格式：学号,考试名称,科目,分数（UTF-8 或 GBK 编码）
-          </div>
-        </div>
-        <div v-if="scoreImportResult" class="result-box" :class="scoreImportResult.success ? 'ok' : 'err'">
-          <div>导入完成：成功 {{ scoreImportResult.imported }} 条，跳过 {{ scoreImportResult.skipped }} 条</div>
-          <div v-if="scoreImportResult.errors && scoreImportResult.errors.length">
-            <div style="margin-top:8px;color:var(--danger)">错误（{{ scoreImportResult.errors.length }} 条）：</div>
-            <ul style="margin:4px 0 0 20px;font-size:13px">
-              <li v-for="(e,i) in scoreImportResult.errors.slice(0,10)" :key="i">第{{ e.row }}行: {{ e.reason }}</li>
-            </ul>
-            <div v-if="scoreImportResult.errors.length > 10">... 共 {{ scoreImportResult.errors.length }} 条错误</div>
-          </div>
-        </div>
-        <div class="tip-box" style="margin-top:12px">
-          <strong>示例：</strong>
-          <pre style="margin:8px 0 0;font-size:12px;color:var(--muted)">学号,考试名称,科目,分数
-2024001,月考1,语文,85
-2024001,月考1,数学,90
-2024002,月考1,语文,88</pre>
         </div>
       </div>
     </div>
@@ -218,7 +183,7 @@ import { useRoute } from 'vue-router'
 import { getRole, getMustChangePwd, changePassword, updateTeacher, deleteTeacher } from '../api/auth.js'
 import InviteManager from '../components/InviteManager.vue'
 import ParentManager from '../components/ParentManager.vue'
-import { getStudents, getClassrooms, createStudent, importStudents, importScores, getTeachers, createTeacher, updateStudent, deleteStudent } from '../api/student.js'
+import { getStudents, getClassrooms, createStudent, importStudents, getTeachers, createTeacher, updateStudent, deleteStudent } from '../api/student.js'
 
 const route = useRoute()
 const isAdmin = getRole() === 'admin'
@@ -253,10 +218,6 @@ const tForm = ref({ account: '', name: '', password: '', role: 'teacher', classN
 const oldPwd = ref('')
 const newPwd = ref('')
 
-// 成绩导入状态
-const scoreImportResult = ref(null)
-const scoreLoading = ref(false)
-
 function setMsg(text, type = 'ok') { msg.value = text; msgType.value = type; setTimeout(() => (msg.value = ''), 4000) }
 function switchTab(t) { tab.value = t; if (t === 'teachers') loadTeachers() }
 
@@ -283,80 +244,6 @@ function downloadTemplate() {
   URL.revokeObjectURL(a.href)
 }
 
-function downloadScoreTemplate() {
-  const csv = '学号,考试名称,科目,分数\n2024001,月考1,语文,85\n2024001,月考1,数学,90\n2024002,月考1,语文,88\n'
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = '成绩导入模板.csv'
-  a.click()
-  URL.revokeObjectURL(a.href)
-}
-
-async function onScoreFile(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  
-  // GBK/UTF-8 检测
-  async function readFileAsText(file) {
-    const buffer = await file.arrayBuffer()
-    try {
-      const utf8Text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
-      if (/[\u4e00-\u9fa5]/.test(utf8Text)) return utf8Text
-    } catch (e) {}
-    try {
-      const gbkText = new TextDecoder('gbk', { fatal: true }).decode(buffer)
-      if (/[\u4e00-\u9fa5]/.test(gbkText)) return gbkText
-    } catch (e) {}
-    return new TextDecoder('utf-8').decode(buffer)
-  }
-  
-  const text = await readFileAsText(file)
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
-  
-  if (lines.length < 2) {
-    setMsg('文件内容为空或只有表头', 'err')
-    e.target.value = ''
-    return
-  }
-  
-  // 解析 CSV
-  const scores = []
-  for (let i = 1; i < lines.length; i++) {
-    const c = lines[i].split(',')
-    if (c.length >= 4) {
-      scores.push({
-        '学号': c[0]?.trim(),
-        '考试名称': c[1]?.trim(),
-        '科目': c[2]?.trim(),
-        '分数': parseFloat(c[3]?.trim()) || 0
-      })
-    }
-  }
-  
-  if (!scores.length) {
-    setMsg('未解析到有效数据', 'err')
-    e.target.value = ''
-    return
-  }
-  
-  scoreLoading.value = true
-  scoreImportResult.value = null
-  try {
-    const r = await importScores(scores)
-    scoreImportResult.value = r
-    if (r.errors && r.errors.length) {
-      setMsg(`导入完成：成功 ${r.imported} 条，失败 ${r.errors.length} 条`, 'warn')
-    } else {
-      setMsg(`成功导入 ${r.imported} 条成绩`, 'ok')
-    }
-  } catch (err) {
-    setMsg(err.message, 'err')
-  }
-  scoreLoading.value = false
-  e.target.value = ''
-}
-
 function parseCSV(text) {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean)
   const rows = []
@@ -372,36 +259,10 @@ function parseCSV(text) {
   return rows
 }
 
-// GBK -> UTF-8 转换（处理 Excel 导出的 GBK CSV）
-function decodeGBK(buffer) {
-  try {
-    const decoder = new TextDecoder('gbk', { fatal: true })
-    return decoder.decode(buffer)
-  } catch (e) {
-    return null
-  }
-}
-
-// 检测并转换编码
-async function readFileAsText(file) {
-  const buffer = await file.arrayBuffer()
-  // 先尝试 UTF-8
-  try {
-    const utf8Text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
-    // 验证是否包含有效的中文
-    if (/[\u4e00-\u9fa5]/.test(utf8Text)) return utf8Text
-  } catch (e) {}
-  // UTF-8 失败，尝试 GBK
-  const gbkText = decodeGBK(buffer)
-  if (gbkText && /[\u4e00-\u9fa5]/.test(gbkText)) return gbkText
-  // 兜底：返回 UTF-8 解码结果（可能乱码）
-  return new TextDecoder('utf-8').decode(buffer)
-}
-
 async function onFile(e) {
   const file = e.target.files[0]
   if (!file) return
-  const text = await readFileAsText(file)
+  const text = await file.text()
   const rows = parseCSV(text)
   if (!rows.length) { setMsg('未解析到有效数据，请检查 CSV 格式', 'err'); return }
   try {
@@ -558,8 +419,4 @@ watch(() => route.query.tab, (t) => { if (t) tab.value = t })
 .btn.danger:hover { opacity: 0.9; }
 .student-card { flex-wrap: wrap; }
 .card-actions { flex-basis: 100%; display: flex; gap: 6px; margin-top: 6px; }
-.result-box { padding: 12px 16px; border-radius: 8px; margin-top: 12px; font-size: 14px; }
-.result-box.ok { background: #e8f6ef; color: var(--primary); }
-.result-box.err { background: #fbe9e9; color: var(--danger); }
-.tip-box { background: #f8f9fa; border-radius: 8px; padding: 12px 16px; font-size: 13px; color: var(--muted); }
 </style>

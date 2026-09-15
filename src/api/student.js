@@ -153,19 +153,6 @@ export async function addScore(studentId, payload) {
   return { success: true }
 }
 
-// 批量导入成绩
-// rows: [{ 学号, 考试名称, 科目, 分数 }]
-export async function importScores(rows) {
-  if (USE_WORKER) {
-    return fetchJSON(`${API}/students/import-scores`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ scores: rows })
-    })
-  }
-  return { success: true, imported: rows.length, skipped: 0, errors: [] }
-}
-
 // payload: { event_date, event_type, content }
 export async function addEvent(studentId, payload) {
   if (USE_WORKER) {
@@ -184,18 +171,6 @@ export async function deleteEvent(studentId, payload) {
     const params = new URLSearchParams(payload).toString()
     return fetchJSON(`${API}/student/${studentId}/event?${params}`, {
       method: 'DELETE'
-    })
-  }
-  return { success: true }
-}
-
-// 保存课堂行为评分（0-5）
-export async function updateBehavior(studentId, payload) {
-  if (USE_WORKER) {
-    return fetchJSON(`${API}/student/${studentId}/behavior`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
     })
   }
   return { success: true }

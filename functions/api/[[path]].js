@@ -733,49 +733,6 @@ async function handleDeleteEvent(request, env, studentId) {
   return jsonResp({ success: true })
 }
 
-async function handleImportScores(request, env, teacher) {
-  const { scores } = await request.json()
-  if (!Array.isArray(scores) || scores.length === 0) {
-    return jsonResp({ error: '没有可导入的成绩数据' }, 400)
-  }
-
-  let imported = 0, skipped = 0, errors = []
-
-  for (let i = 0; i < scores.length; i++) {
-    const row = scores[i]
-    const studentId = String(row['学号'] || row['id'] || '').trim()
-    const examName = String(row['考试名称'] || row['exam_name'] || row['考试'] || '').trim()
-    const subject = String(row['科目'] || row['subject'] || '').trim()
-    const score = parseFloat(row['分数'] || row['score'] || row['成绩'] || 0)
-
-    if (!studentId || !examName || !subject || isNaN(score)) {
-      errors.push({ row: i + 1, data: row, reason: '学号/考试名称/科目/分数 任一为空或无效' })
-      continue
-    }
-
-    // 验证学生是否存在且在教师班级
-    const student = await env.DB.prepare(
-      `SELECT id FROM users WHERE id = ? AND role = 'student' AND class_name = ?`
-    ).bind(studentId, teacher.className).first()
-    if (!student) {
-      errors.push({ row: i + 1, studentId, reason: '学生不存在或不在本班' })
-      skipped++
-      continue
-    }
-
-    try {
-      await env.DB.prepare(
-        `INSERT OR REPLACE INTO scores (student_id, exam_name, subject, score) VALUES (?, ?, ?, ?)`
-      ).bind(studentId, examName, subject, score).run()
-      imported++
-    } catch (e) {
-      errors.push({ row: i + 1, studentId, reason: '写入失败: ' + e.message })
-    }
-  }
-
-  return jsonResp({ success: true, imported, skipped, errors, total: scores.length })
-}
-
 // ===== 主入口 =====
 export async function onRequest(context) {
   const { request, env } = context
@@ -865,18 +822,11 @@ export async function onRequest(context) {
     return handleDeleteStudent(request, env, t, path.split('/')[2])
   }
 
-  // 批量导入学生
+  // 批量导入
   if (path === '/students/import' && method === 'POST') {
     const { user: t, response: r } = await requireTeacher(request, env)
     if (r) return r
     return handleImportStudents(request, env, t)
-  }
-
-  // 批量导入成绩
-  if (path === '/students/import-scores' && method === 'POST') {
-    const { user: t, response: r } = await requireTeacher(request, env)
-    if (r) return r
-    return handleImportScores(request, env, t)
   }
 
   // 单个学生档案
@@ -997,70 +947,7 @@ export async function onRequest(context) {
     return handleFixClassNames(request, env)
   }
 
-  
-// ===== 课堂行为评分编辑 =====
-async function handleUpdateBehavior(request, env, teacher, studentId) {
-  // 权限检查：只能编辑自己班级的学生
-  const target = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(studentId).first()
-  if (!target) return jsonResp({ error: '学生不存在' }, 404)
-
-  let body
-  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
-
-  // 验证并收集字段
-  const fields = ['raise_hand', 'focus', 'cooperation', 'homework_quality']
-  const values = {}
-  for (const f of fields) {
-    if (body[f] !== undefined) {
-      const v = Number(body[f])
-      if (isNaN(v) || v < 0 || v > 5) {
-        return jsonResp({ error: f + ' 必须在 0-5 之间' }, 400)
-      }
-      values[f] = v
-    }
-  }
-  if (Object.keys(values).length === 0) {
-    return jsonResp({ error: '没有提供需要更新的字段' }, 400)
-  }
-
-  // UPSERT：如果存在则更新，否则插入
-  const existing = await env.DB.prepare(
-    `SELECT student_id FROM behavior WHERE student_id = ?`
-  ).bind(studentId).first()
-
-  if (existing) {
-    await env.DB.prepare(`
-      UPDATE behavior SET
-        raise_hand = COALESCE(?, raise_hand),
-        focus = COALESCE(?, focus),
-        cooperation = COALESCE(?, cooperation),
-        homework_quality = COALESCE(?, homework_quality),
-        updated_at = datetime('now')
-      WHERE student_id = ?
-    `).bind(
-      values.raise_hand ?? null,
-      values.focus ?? null,
-      values.cooperation ?? null,
-      values.homework_quality ?? null,
-      studentId
-    ).run()
-  } else {
-    await env.DB.prepare(`
-      INSERT INTO behavior (student_id, raise_hand, focus, cooperation, homework_quality)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(
-      studentId,
-      values.raise_hand ?? 0,
-      values.focus ?? 0,
-      values.cooperation ?? 0,
-      values.homework_quality ?? 0
-    ).run()
-  }
-
-  return jsonResp({ success: true })
-}
-
-// AI 报告
+  // AI 报告
   if (path === '/ai/report' && method === 'POST') {
     return handleAIReport(request, env, user)
   }

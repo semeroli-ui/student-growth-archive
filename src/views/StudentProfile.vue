@@ -32,9 +32,7 @@
         <ScoreTrendChart :scores="student.scores" @exam-click="openExamDetail" />
       </div>
       <div class="card">
-        <h2>课堂行为雷达
-          <span v-if="isStaff" class="edit-badge" @click="openBehaviorEdit">✏️ 编辑</span>
-        </h2>
+        <h2>课堂行为雷达</h2>
         <BehaviorRadar :behavior="student.behavior" />
       </div>
     </div>
@@ -95,29 +93,6 @@
     <!-- 图片预览 -->
     <div v-if="previewSrc" class="modal-overlay" @click="previewSrc=null">
       <img :src="previewSrc" class="preview-img" />
-    </div>
-
-    <!-- 行为评分编辑弹窗 -->
-    <div v-if="behaviorEditing" class="modal-overlay" @click.self="behaviorEditing=false">
-      <div class="modal">
-        <div class="modal-head">
-          <h3>编辑课堂行为评分</h3>
-          <button class="modal-close" @click="behaviorEditing=false">✕</button>
-        </div>
-        <div class="modal-body">
-          <p style="font-size:12px;color:var(--muted);margin-bottom:12px">每个维度满分 5 分</p>
-          <div v-for="(label, key) in behaviorFields" :key="key" class="behavior-field">
-            <label>{{ label }}</label>
-            <input v-model.number="behaviorForm[key]" type="range" min="0" max="5" step="0.5" class="slider" />
-            <span class="slider-val">{{ behaviorForm[key] }}</span>
-          </div>
-          <p v-if="behaviorMsg" :class="['msg', behaviorMsgType]" style="margin-top:12px">{{ behaviorMsg }}</p>
-          <div style="display:flex;gap:8px;margin-top:16px">
-            <button class="btn" @click="behaviorEditing=false">取消</button>
-            <button class="btn primary" :disabled="behaviorLoading" @click="doSaveBehavior">{{ behaviorLoading ? '保存中…' : '保存' }}</button>
-          </div>
-        </div>
-      </div>
     </div>
 
     <!-- AI 报告 -->
@@ -198,7 +173,7 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent, updateBehavior } from '../api/student.js'
+import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent } from '../api/student.js'
 import { getRole } from '../api/auth.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
@@ -223,17 +198,6 @@ const eventForm = ref({ event_date: '', event_type: '奖励', content: '' })
 const eventMsg = ref('')
 const eventMsgType = ref('ok')
 const eventLoading = ref(false)
-const behaviorEditing = ref(false)
-const behaviorForm = ref({ raise_hand: 0, focus: 0, cooperation: 0, homework_quality: 0 })
-const behaviorMsg = ref('')
-const behaviorMsgType = ref('ok')
-const behaviorLoading = ref(false)
-const behaviorFields = {
-  raise_hand: '举手积极性',
-  focus: '专注度',
-  cooperation: '合作度',
-  homework_quality: '作业质量'
-}
 
 // ========== 成绩附件 ==========
 const MAX_IMGS = 3
@@ -418,64 +382,7 @@ async function doDeleteEvent(i) {
     student.value = await getStudent(student.value.id)
   }
 }
-
-// ========== 行为评分编辑 ==========
-function openBehaviorEdit() {
-  const b = student.value.behavior
-  behaviorForm.value = {
-    raise_hand: b['举手'] || 0,
-    focus: b['专注'] || 0,
-    cooperation: b['合作'] || 0,
-    homework_quality: b['作业质量'] || 0
-  }
-  behaviorMsg.value = ''
-  behaviorEditing.value = true
-}
-
-async function doSaveBehavior() {
-  const f = behaviorForm.value
-  for (const key of Object.keys(f)) {
-    if (f[key] < 0 || f[key] > 5) {
-      behaviorMsg.value = '所有评分需在 0-5 之间';
-      behaviorMsgType.value = 'err';
-      return
-    }
-  }
-  behaviorLoading.value = true
-  behaviorMsg.value = ''
-  try {
-    const r = await updateBehavior(student.value.id, f)
-    if (r.success) {
-      behaviorMsg.value = '已保存'
-      behaviorMsgType.value = 'ok'
-      setTimeout(() => { behaviorEditing.value = false }, 800)
-      student.value = await getStudent(student.value.id)
-    } else {
-      behaviorMsg.value = r.error || '保存失败'
-      behaviorMsgType.value = 'err'
-    }
-  } catch (e) {
-    behaviorMsg.value = e.message
-    behaviorMsgType.value = 'err'
-  } finally {
-    behaviorLoading.value = false
-  }
-}
 </script>
-
-.edit-badge {
-  float: right; font-size: 12px; cursor: pointer; opacity: 0.6;
-  padding: 2px 8px; border-radius: 4px; background: var(--primary-light);
-}
-.edit-badge:hover { opacity: 1; }
-.behavior-field {
-  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
-}
-.behavior-field label { width: 80px; font-size: 14px; }
-.behavior-field .slider { flex: 1; }
-.behavior-field .slider-val {
-  width: 32px; text-align: center; font-weight: 600; color: var(--primary);
-}
 
 <style scoped>
 .ai-loading { text-align: center; padding: 24px; }
