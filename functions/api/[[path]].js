@@ -589,9 +589,9 @@ async function handleImportStudents(request, env, teacher) {
     const row = students[i]
     const account = String(row.account || '').trim()
     const name = String(row.name || '').trim()
-    const rawClass = String(row.className || '').trim()
+    // className ignored - forced to teacher.className
     // 导入时额外清理全角括号
-    const className = fwRe.test(rawClass) ? normalizeClassName(rawClass) : rawClass
+    const className = teacher.className
     if (!account || !name || !className) {
       errors.push({ row: i + 1, account, reason: '学号/姓名/班级 任一为空' })
       continue
