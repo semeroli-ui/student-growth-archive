@@ -793,11 +793,17 @@ export async function onRequest(context) {
 
   // 学生列表
   if (path === '/students' && method === 'GET') {
+<<<<<<< HEAD
     // 学生只看自己班级；教师/管理员：query参数优先，其次session班级；空/全部班级 → 查全部
     const rawClass = user.role === 'student'
       ? user.className
       : (url.searchParams.get('class') || user.className)
     const className = (!rawClass || rawClass === '全部班级') ? null : rawClass
+=======
+    const className = user.role === 'student'
+      ? user.className
+      : (url.searchParams.get('class') || user.className)
+>>>>>>> 7018d42137b8bd5b0cf4326697f7a446d779fa86
     const students = await dbGetStudents(env, className)
     return jsonResp(students)
   }
