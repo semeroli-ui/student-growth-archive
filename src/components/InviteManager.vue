@@ -6,7 +6,7 @@
     <div class="gen-box">
       <div class="row">
         <div class="field">
-          <label>默认班级（可选）</label>
+          <label>班级（教师必填）</label>
           <input v-model="className" class="input" placeholder="如 高三(2)班" />
         </div>
         <div class="field small">
@@ -81,10 +81,11 @@ async function load() {
 }
 
 async function doGen() {
+  if (!className.value.trim()) { setMsg('请填写班级名称', 'err'); return }
   genLoading.value = true
   newCodes.value = []
   try {
-    const r = await createInviteCodes({ className: className.value || undefined, count: count.value, expiresInDays: expiresInDays.value })
+    const r = await createInviteCodes({ className: className.value.trim(), count: count.value, expiresInDays: expiresInDays.value })
     if (r.ok && r.data && r.data.codes) { newCodes.value = r.data.codes; setMsg(`已生成 ${r.data.codes.length} 个邀请码`, 'ok') }
     else setMsg((r.data && r.data.error) || '生成失败', 'err')
     load()

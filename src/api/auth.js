@@ -155,3 +155,19 @@ export async function getParents() {
 export async function linkParentStudent(parentId, studentId) {
   return authFetch('/api/admin/parent-links', { method: 'POST', body: JSON.stringify({ parentId, studentId }) })
 }
+
+// ===== 教师编辑/删除（仅管理员）=====
+export async function updateTeacher(id, payload) {
+  return authFetch(`/api/admin/teachers/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export async function deleteTeacher(id) {
+  return authFetch(`/api/admin/teachers/${id}`, { method: 'DELETE' })
+}
+
+// ===== 家长编辑/删除（教师/管理员）=====
+export async function updateParent(id, payload) {
+  return authFetch(`/api/admin/parents/${id}`, { method: 'PUT', body: JSON.stringify(payload) })
+}
+export async function deleteParent(id) {
+  return authFetch(`/api/admin/parents/${id}`, { method: 'DELETE' })
+}
