@@ -157,6 +157,28 @@ async function dbGetStudent(env, id) {
     `SELECT total, missed, rate FROM homework WHERE student_id = ?`
   ).bind(id).first() || { rate: 0, missed: 0, total: 0 }
 
+  // 作业明细（明细模型启用后才有数据；表尚未创建时静默降级为空数组）
+  let homeworkDetail = []
+  try {
+    const { results: hwRows } = await env.DB.prepare(
+      `SELECT ha.id AS id, ha.title AS title, ha.subject AS subject, ha.due_date AS dueDate,
+              hr.status AS status, hr.note AS note
+       FROM homework_records hr
+       JOIN homework_assignments ha ON ha.id = hr.assignment_id
+       WHERE hr.student_id = ?
+       ORDER BY ha.due_date DESC, ha.id DESC
+       LIMIT 15`
+    ).bind(id).all()
+    homeworkDetail = (hwRows || []).map(r => ({
+      id: r.id,
+      title: r.title,
+      subject: r.subject,
+      dueDate: r.dueDate,
+      status: r.status,
+      note: r.note || ''
+    }))
+  } catch { homeworkDetail = [] }
+
   const behaviorRow = await env.DB.prepare(
     `SELECT raise_hand, focus, cooperation, homework_quality FROM behavior WHERE student_id = ?`
   ).bind(id).first()
@@ -186,6 +208,7 @@ async function dbGetStudent(env, id) {
     className: user.class_name,
     scores,
     homework,
+    homeworkDetail,
     behavior,
     events,
     aiReport
@@ -874,6 +897,478 @@ async function handleUpdateHomework(request, env, teacher, studentId) {
   return jsonResp({ success: true, rate })
 }
 
+// ===== 作业明细模型（每次作业 × 每人提交状态）=====
+// 解决的问题：汇总式 total/missed 只能回答「提交率多少」，
+// 无法回答「这次作业谁没交」。明细模型以「一次作业」为粒度记录每个人的状态，
+// 再把结果回写 homework 汇总表，使班级概览、家长端、AI 报告口径保持一致。
+//
+// 状态：submitted 已交 / late 补交 / missing 未交 / exempt 免交 / pending 待标记
+// 提交率口径：已交 = submitted + late，应交 = 已交 + missing（pending/exempt 不计入分母）
+
+const HOMEWORK_STATUSES = ['submitted', 'late', 'missing', 'exempt', 'pending']
+const HW_STATUS_LABELS = { submitted: '已交', late: '补交', missing: '未交', exempt: '免交', pending: '待标记' }
+const HW_STATUS_ALIASES = {
+  'submitted': 'submitted', '已交': 'submitted', '提交': 'submitted', '已提交': 'submitted', '完成': 'submitted',
+  '是': 'submitted', 'y': 'submitted', 'yes': 'submitted', '1': 'submitted', 'true': 'submitted',
+  'late': 'late', '补交': 'late', '迟交': 'late', '补': 'late',
+  'missing': 'missing', '未交': 'missing', '没交': 'missing', '缺交': 'missing', '未完成': 'missing',
+  '否': 'missing', 'n': 'missing', 'no': 'missing', '0': 'missing', 'false': 'missing',
+  'exempt': 'exempt', '免交': 'exempt', '免': 'exempt', '请假': 'exempt',
+  'pending': 'pending', '待标记': 'pending', '未标记': 'pending'
+}
+
+function normalizeHomeworkStatus(v) {
+  const raw = String(v ?? '').trim()
+  const key = raw.toLowerCase()
+  return HW_STATUS_ALIASES[key] ?? HW_STATUS_ALIASES[raw] ?? null
+}
+
+// 日期归一化：接受 2026/9/1、2026.9.1、2026-9-1 → 2026-09-01
+function normalizeDate(v) {
+  const s = String(v ?? '').trim().replace(/[.／/]/g, '-')
+  const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+  if (!m) return null
+  return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`
+}
+
+function placeholders(n) {
+  return new Array(n).fill('?').join(',')
+}
+
+// 建表：D1 没有迁移框架，采用「首次使用时建表」，
+// 让新功能部署后零手工步骤即可用（建表语句同时归档在 schema/homework-detail.sql）
+const HOMEWORK_DDL = [
+  `CREATE TABLE IF NOT EXISTS homework_assignments (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     class_name TEXT NOT NULL,
+     subject TEXT NOT NULL DEFAULT '',
+     title TEXT NOT NULL,
+     due_date TEXT NOT NULL,
+     note TEXT DEFAULT '',
+     created_by TEXT,
+     created_at TEXT DEFAULT (datetime('now'))
+   )`,
+  `CREATE TABLE IF NOT EXISTS homework_records (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     assignment_id INTEGER NOT NULL,
+     student_id TEXT NOT NULL,
+     status TEXT NOT NULL DEFAULT 'pending',
+     note TEXT DEFAULT '',
+     updated_at TEXT DEFAULT (datetime('now'))
+   )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_hw_asg_uniq ON homework_assignments (class_name, subject, title, due_date)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_hw_rec_uniq ON homework_records (assignment_id, student_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_hw_rec_student ON homework_records (student_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_hw_asg_class ON homework_assignments (class_name, due_date)`
+]
+
+let __hwTablesReady = false
+async function ensureHomeworkTables(env) {
+  if (__hwTablesReady) return
+  for (const sql of HOMEWORK_DDL) {
+    await env.DB.prepare(sql).run()
+  }
+  __hwTablesReady = true
+}
+
+// 班级维度的可见范围：管理员可跨班（class= 空 → 全部），教师仅限本人班级
+function resolveHomeworkScope(user, url) {
+  const q = String(url.searchParams.get('class') || '').trim()
+  if (user.role === 'admin') {
+    return (!q || q === '全部班级') ? null : normalizeClassName(q)
+  }
+  return user.className ? normalizeClassName(user.className) : null
+}
+
+function assertHomeworkScope(user, className) {
+  if (user.role === 'admin') return null
+  if (normalizeClassName(user.className || '') !== normalizeClassName(className || '')) {
+    return jsonResp({ error: '只能操作自己负责的班级' }, 403)
+  }
+  return null
+}
+
+async function dbGetClassStudents(env, className) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, name FROM users WHERE role = 'student' AND class_name = ? ORDER BY id`
+  ).bind(className).all()
+  return results || []
+}
+
+async function upsertHomeworkSummary(env, studentId, total, missed) {
+  const rate = total === 0 ? 0 : (total - missed) / total
+  const existing = await env.DB.prepare(
+    `SELECT student_id FROM homework WHERE student_id = ?`
+  ).bind(studentId).first()
+  if (existing) {
+    await env.DB.prepare(
+      `UPDATE homework SET total = ?, missed = ?, rate = ?, updated_at = datetime('now') WHERE student_id = ?`
+    ).bind(total, missed, rate, studentId).run()
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO homework (student_id, total, missed, rate) VALUES (?, ?, ?, ?)`
+    ).bind(studentId, total, missed, rate).run()
+  }
+  return rate
+}
+
+// 由明细回写汇总。allowZero=false 时，没有任何已标记记录的学生保留原有手工汇总值，
+// 避免明细功能一上线就把教师手工录入的提交率清零。
+async function recomputeHomeworkForStudents(env, studentIds, { allowZero = false } = {}) {
+  const ids = [...new Set((studentIds || []).filter(Boolean))]
+  let updated = 0
+  for (const sid of ids) {
+    const { results } = await env.DB.prepare(
+      `SELECT status, COUNT(*) AS c FROM homework_records WHERE student_id = ? GROUP BY status`
+    ).bind(sid).all()
+    const counts = { submitted: 0, late: 0, missing: 0, exempt: 0, pending: 0 }
+    for (const r of (results || [])) {
+      if (counts[r.status] !== undefined) counts[r.status] = Number(r.c) || 0
+    }
+    const total = counts.submitted + counts.late + counts.missing
+    if (total === 0 && !allowZero) continue
+    await upsertHomeworkSummary(env, sid, total, counts.missing)
+    updated++
+  }
+  return updated
+}
+
+async function getOrCreateAssignment(env, className, subject, title, dueDate, createdBy) {
+  const found = await env.DB.prepare(
+    `SELECT id FROM homework_assignments WHERE class_name = ? AND subject = ? AND title = ? AND due_date = ?`
+  ).bind(className, subject, title, dueDate).first()
+  if (found) return { id: found.id, created: false }
+
+  const res = await env.DB.prepare(
+    `INSERT INTO homework_assignments (class_name, subject, title, due_date, created_by) VALUES (?, ?, ?, ?, ?)`
+  ).bind(className, subject, title, dueDate, createdBy || null).run()
+  return { id: res.meta?.last_row_id, created: true }
+}
+
+function homeworkCountsToStats(counts) {
+  const c = { submitted: 0, late: 0, missing: 0, exempt: 0, pending: 0, ...counts }
+  const submittedTotal = c.submitted + c.late
+  const total = submittedTotal + c.missing
+  return {
+    submitted: c.submitted,
+    late: c.late,
+    missing: c.missing,
+    exempt: c.exempt,
+    pending: c.pending,
+    total,
+    submittedTotal,
+    rate: total === 0 ? 0 : submittedTotal / total
+  }
+}
+
+// 作业列表（含「谁没交」名单）
+async function handleListHomeworkAssignments(request, env, user) {
+  await ensureHomeworkTables(env)
+  const url = new URL(request.url)
+  const className = resolveHomeworkScope(user, url)
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get('limit')) || 30, 1), 200)
+
+  const sql = `
+    SELECT ha.id, ha.class_name, ha.subject, ha.title, ha.due_date, ha.note, ha.created_at,
+           IFNULL(SUM(CASE WHEN hr.status = 'submitted' THEN 1 ELSE 0 END), 0) AS submitted,
+           IFNULL(SUM(CASE WHEN hr.status = 'late' THEN 1 ELSE 0 END), 0) AS late,
+           IFNULL(SUM(CASE WHEN hr.status = 'missing' THEN 1 ELSE 0 END), 0) AS missing,
+           IFNULL(SUM(CASE WHEN hr.status = 'exempt' THEN 1 ELSE 0 END), 0) AS exempt,
+           IFNULL(SUM(CASE WHEN hr.status = 'pending' THEN 1 ELSE 0 END), 0) AS pending
+    FROM homework_assignments ha
+    LEFT JOIN homework_records hr ON hr.assignment_id = ha.id
+    ${className ? 'WHERE ha.class_name = ?' : ''}
+    GROUP BY ha.id
+    ORDER BY ha.due_date DESC, ha.id DESC
+    LIMIT ?`
+  const binds = className ? [className, limit] : [limit]
+  const { results } = await env.DB.prepare(sql).bind(...binds).all()
+  const rows = results || []
+
+  // 一次查出所有「未交 / 补交」名单，避免逐条查询
+  const byAssignment = {}
+  const ids = rows.map(r => r.id)
+  if (ids.length) {
+    const { results: names } = await env.DB.prepare(
+      `SELECT hr.assignment_id AS aid, u.id AS sid, u.name AS name, hr.status AS status
+       FROM homework_records hr
+       JOIN users u ON u.id = hr.student_id
+       WHERE hr.assignment_id IN (${placeholders(ids.length)})
+         AND hr.status IN ('missing', 'late')
+       ORDER BY u.id`
+    ).bind(...ids).all()
+    for (const n of (names || [])) {
+      if (!byAssignment[n.aid]) byAssignment[n.aid] = { missing: [], late: [] }
+      byAssignment[n.aid][n.status].push({ id: n.sid, name: n.name })
+    }
+  }
+
+  return jsonResp(rows.map(r => ({
+    id: r.id,
+    className: r.class_name,
+    subject: r.subject,
+    title: r.title,
+    dueDate: r.due_date,
+    note: r.note,
+    createdAt: r.created_at,
+    stats: homeworkCountsToStats({
+      submitted: Number(r.submitted) || 0,
+      late: Number(r.late) || 0,
+      missing: Number(r.missing) || 0,
+      exempt: Number(r.exempt) || 0,
+      pending: Number(r.pending) || 0
+    }),
+    notSubmitted: (byAssignment[r.id] || {}).missing || [],
+    lateStudents: (byAssignment[r.id] || {}).late || []
+  })))
+}
+
+// 新建作业：自动为该班全体学生建立「待标记」记录
+async function handleCreateHomeworkAssignment(request, env, teacher) {
+  await ensureHomeworkTables(env)
+  let body
+  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
+
+  const className = normalizeClassName(body.className || teacher.className || '')
+  const title = String(body.title || '').trim()
+  const subject = String(body.subject || '').trim()
+  const dueDate = normalizeDate(body.dueDate)
+  const note = String(body.note || '').trim()
+
+  if (!className) return jsonResp({ error: '请选择班级' }, 400)
+  if (!title) return jsonResp({ error: '请填写作业标题' }, 400)
+  if (!dueDate) return jsonResp({ error: '请填写截止日期（YYYY-MM-DD）' }, 400)
+
+  const denied = assertHomeworkScope(teacher, className)
+  if (denied) return denied
+
+  const students = await dbGetClassStudents(env, className)
+  if (!students.length) return jsonResp({ error: '该班级还没有学生，请先导入学生' }, 400)
+
+  const { id: assignmentId } = await getOrCreateAssignment(env, className, subject, title, dueDate, teacher.id)
+
+  for (const s of students) {
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO homework_records (assignment_id, student_id, status) VALUES (?, ?, 'pending')`
+    ).bind(assignmentId, s.id).run()
+  }
+
+  return jsonResp({ success: true, id: assignmentId, studentCount: students.length })
+}
+
+// 单次作业详情（以 users 表为驱动，新转入的学生也会出现在名单里）
+async function handleGetHomeworkAssignment(request, env, user, id) {
+  await ensureHomeworkTables(env)
+  const asg = await env.DB.prepare(
+    `SELECT id, class_name, subject, title, due_date, note, created_at FROM homework_assignments WHERE id = ?`
+  ).bind(id).first()
+  if (!asg) return jsonResp({ error: '作业不存在' }, 404)
+  const denied = assertHomeworkScope(user, asg.class_name)
+  if (denied) return denied
+
+  const { results } = await env.DB.prepare(
+    `SELECT u.id AS student_id, u.name AS name,
+            IFNULL(hr.status, 'pending') AS status,
+            IFNULL(hr.note, '') AS note
+     FROM users u
+     LEFT JOIN homework_records hr ON hr.student_id = u.id AND hr.assignment_id = ?
+     WHERE u.role = 'student' AND u.class_name = ?
+     ORDER BY u.id`
+  ).bind(id, asg.class_name).all()
+
+  const records = (results || []).map(r => ({
+    studentId: r.student_id,
+    name: r.name,
+    status: r.status,
+    note: r.note
+  }))
+  const counts = { submitted: 0, late: 0, missing: 0, exempt: 0, pending: 0 }
+  for (const r of records) counts[r.status] = (counts[r.status] || 0) + 1
+
+  return jsonResp({
+    assignment: {
+      id: asg.id,
+      className: asg.class_name,
+      subject: asg.subject,
+      title: asg.title,
+      dueDate: asg.due_date,
+      note: asg.note,
+      createdAt: asg.created_at
+    },
+    records,
+    stats: homeworkCountsToStats(counts)
+  })
+}
+
+// 批量保存提交状态（点名）：只允许提交本班学生，保存后回写汇总
+async function handleSaveHomeworkRecords(request, env, user, id) {
+  await ensureHomeworkTables(env)
+  const asg = await env.DB.prepare(
+    `SELECT id, class_name FROM homework_assignments WHERE id = ?`
+  ).bind(id).first()
+  if (!asg) return jsonResp({ error: '作业不存在' }, 404)
+  const denied = assertHomeworkScope(user, asg.class_name)
+  if (denied) return denied
+
+  let body
+  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
+  const records = Array.isArray(body.records) ? body.records : null
+  if (!records || !records.length) return jsonResp({ error: '没有需要保存的记录' }, 400)
+
+  const validStudents = new Set((await dbGetClassStudents(env, asg.class_name)).map(s => s.id))
+  const affected = []
+  let updated = 0
+
+  for (const r of records) {
+    const studentId = String(r.studentId ?? r.student_id ?? '').trim()
+    if (!studentId) return jsonResp({ error: '记录缺少学号' }, 400)
+    if (!validStudents.has(studentId)) {
+      return jsonResp({ error: `学号 ${studentId} 不在本班，已终止保存` }, 400)
+    }
+    const status = normalizeHomeworkStatus(r.status)
+    if (!status || !HOMEWORK_STATUSES.includes(status)) {
+      return jsonResp({ error: `学号 ${studentId} 的状态无效：${r.status}` }, 400)
+    }
+    const note = String(r.note || '').trim()
+
+    await env.DB.prepare(
+      `INSERT INTO homework_records (assignment_id, student_id, status, note)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(assignment_id, student_id)
+       DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = datetime('now')`
+    ).bind(id, studentId, status, note).run()
+    affected.push(studentId)
+    updated++
+  }
+
+  await recomputeHomeworkForStudents(env, affected, { allowZero: true })
+
+  const { results } = await env.DB.prepare(
+    `SELECT status, COUNT(*) AS c FROM homework_records WHERE assignment_id = ? GROUP BY status`
+  ).bind(id).all()
+  const counts = { submitted: 0, late: 0, missing: 0, exempt: 0, pending: 0 }
+  for (const r of (results || [])) counts[r.status] = Number(r.c) || 0
+
+  return jsonResp({ success: true, updated, stats: homeworkCountsToStats(counts) })
+}
+
+async function handleDeleteHomeworkAssignment(request, env, user, id) {
+  await ensureHomeworkTables(env)
+  const asg = await env.DB.prepare(
+    `SELECT id, class_name FROM homework_assignments WHERE id = ?`
+  ).bind(id).first()
+  if (!asg) return jsonResp({ error: '作业不存在' }, 404)
+  const denied = assertHomeworkScope(user, asg.class_name)
+  if (denied) return denied
+
+  const { results } = await env.DB.prepare(
+    `SELECT student_id FROM homework_records WHERE assignment_id = ?`
+  ).bind(id).all()
+  const affected = (results || []).map(r => r.student_id)
+
+  await env.DB.prepare(`DELETE FROM homework_records WHERE assignment_id = ?`).bind(id).run()
+  await env.DB.prepare(`DELETE FROM homework_assignments WHERE id = ?`).bind(id).run()
+  // 删掉最后一次作业后，明细口径应归零，因此允许写 0
+  await recomputeHomeworkForStudents(env, affected, { allowZero: true })
+
+  return jsonResp({ success: true, affectedStudents: affected.length })
+}
+
+// CSV 批量录入作业数据
+// mode='summary'：学号,应交次数,未交次数 → 直接写 homework 汇总
+// mode='detail' ：作业标题,科目,日期,学号,状态 → 建作业并逐人记状态
+async function handleImportHomework(request, env, teacher) {
+  await ensureHomeworkTables(env)
+  let body
+  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
+
+  const mode = body.mode === 'detail' ? 'detail' : 'summary'
+  const rows = Array.isArray(body.rows) ? body.rows : []
+  if (!rows.length) return jsonResp({ error: '没有可导入的数据' }, 400)
+
+  let imported = 0, skipped = 0
+  const errors = []
+  const affected = []
+
+  // 教师只能录入自己班级（管理员按学生实际班级）
+  const ownClass = normalizeClassName(teacher.className || '')
+  const scopeOk = className => teacher.role === 'admin' || normalizeClassName(className || '') === ownClass
+
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    const studentId = String(row['学号'] || row['学生学号'] || row['id'] || '').trim()
+
+    if (!studentId) {
+      errors.push({ row: i + 1, reason: '缺少学号' })
+      continue
+    }
+    const student = await env.DB.prepare(
+      `SELECT id, name, class_name FROM users WHERE id = ? AND role = 'student'`
+    ).bind(studentId).first()
+    if (!student) {
+      errors.push({ row: i + 1, studentId, reason: '学生不存在' })
+      skipped++
+      continue
+    }
+    if (!scopeOk(student.class_name)) {
+      errors.push({ row: i + 1, studentId, reason: '学生不在你负责的班级' })
+      skipped++
+      continue
+    }
+
+    try {
+      if (mode === 'summary') {
+        const rawTotal = row['应交次数'] ?? row['应交'] ?? row['total'] ?? row['应提交次数']
+        const rawMissed = row['未交次数'] ?? row['未交'] ?? row['missed'] ?? row['缺交次数']
+        const total = Number(rawTotal)
+        const missed = Number(rawMissed)
+        if (!Number.isInteger(total) || total < 0) {
+          errors.push({ row: i + 1, studentId, reason: '应交次数必须是不小于 0 的整数' })
+          continue
+        }
+        if (!Number.isInteger(missed) || missed < 0 || missed > total) {
+          errors.push({ row: i + 1, studentId, reason: '未交次数必须是不小于 0 且不超过应交次数的整数' })
+          continue
+        }
+        await upsertHomeworkSummary(env, studentId, total, missed)
+        imported++
+      } else {
+        const title = String(row['作业标题'] || row['标题'] || row['title'] || '').trim()
+        const subject = String(row['科目'] || row['subject'] || '').trim()
+        const dueDate = normalizeDate(row['日期'] || row['截止日期'] || row['due_date'] || row['dueDate']) || new Date().toISOString().slice(0, 10)
+        const rawStatus = row['状态'] ?? row['提交状态'] ?? row['status'] ?? ''
+        const status = normalizeHomeworkStatus(rawStatus)
+        if (!title) {
+          errors.push({ row: i + 1, studentId, reason: '缺少作业标题' })
+          continue
+        }
+        if (!status) {
+          errors.push({ row: i + 1, studentId, reason: `无法识别的状态：${rawStatus}` })
+          continue
+        }
+        const { id: assignmentId } = await getOrCreateAssignment(env, student.class_name, subject, title, dueDate, teacher.id)
+        await env.DB.prepare(
+          `INSERT INTO homework_records (assignment_id, student_id, status, note)
+           VALUES (?, ?, ?, '')
+           ON CONFLICT(assignment_id, student_id)
+           DO UPDATE SET status = excluded.status, updated_at = datetime('now')`
+        ).bind(assignmentId, studentId, status).run()
+        affected.push(studentId)
+        imported++
+      }
+    } catch (e) {
+      errors.push({ row: i + 1, studentId, reason: '写入失败: ' + e.message })
+    }
+  }
+
+  let summaryUpdated = 0
+  if (mode === 'detail' && affected.length) {
+    summaryUpdated = await recomputeHomeworkForStudents(env, affected)
+  }
+
+  return jsonResp({ success: true, mode, imported, skipped, summaryUpdated, errors, total: rows.length })
+}
+
 // ===== 主入口 =====
 export async function onRequest(context) {
   const { request, env } = context
@@ -977,6 +1472,13 @@ export async function onRequest(context) {
     return handleImportScores(request, env, t)
   }
 
+  // 批量录入作业数据（CSV：汇总式 / 明细式）
+  if (path === '/students/import-homework' && method === 'POST') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleImportHomework(request, env, t)
+  }
+
   // 单个学生档案
   if (path.startsWith('/student/') && method === 'GET') {
     const parts = path.split('/').filter(Boolean)
@@ -1030,6 +1532,38 @@ export async function onRequest(context) {
     const { user: teacher, response: r } = await requireTeacher(request, env)
     if (r) return r
     return handleUpdateHomework(request, env, teacher, path.split('/')[2])
+  }
+
+  // ===== 作业明细：每次作业 × 每人提交状态 =====
+  // 作业列表（含「谁没交」名单）
+  if (path === '/homework/assignments' && method === 'GET') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleListHomeworkAssignments(request, env, t)
+  }
+  // 新建作业（自动为该班学生建立待标记记录）
+  if (path === '/homework/assignments' && method === 'POST') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleCreateHomeworkAssignment(request, env, t)
+  }
+  // 单次作业详情（名单 + 状态）
+  if (path.match(/^\/homework\/assignments\/[^/]+$/) && method === 'GET') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleGetHomeworkAssignment(request, env, t, path.split('/')[3])
+  }
+  // 保存点名结果
+  if (path.match(/^\/homework\/assignments\/[^/]+\/records$/) && method === 'PUT') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleSaveHomeworkRecords(request, env, t, path.split('/')[3])
+  }
+  // 删除作业（连带明细，并重算汇总）
+  if (path.match(/^\/homework\/assignments\/[^/]+$/) && method === 'DELETE') {
+    const { user: t, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleDeleteHomeworkAssignment(request, env, t, path.split('/')[3])
   }
 
   // 邀请码管理

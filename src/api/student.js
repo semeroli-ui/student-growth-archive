@@ -212,3 +212,68 @@ export async function updateHomework(studentId, payload) {
   }
   return { success: true }
 }
+
+// ===== 作业明细模型（每次作业 × 每人提交状态）=====
+
+// 作业列表（含「谁没交」名单）：params = { class?, limit? }
+export async function getHomeworkAssignments(params = {}) {
+  if (USE_WORKER) {
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== '')
+    ).toString()
+    return fetchJSON(`${API}/homework/assignments${qs ? '?' + qs : ''}`)
+  }
+  return []
+}
+
+// 新建作业：payload = { className, subject, title, dueDate, note? }
+export async function createHomeworkAssignment(payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/homework/assignments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}
+
+// 单次作业详情：{ assignment, records, stats }
+export async function getHomeworkAssignment(id) {
+  if (USE_WORKER) return fetchJSON(`${API}/homework/assignments/${id}`)
+  return null
+}
+
+// 保存点名结果：records = [{ studentId, status, note? }]
+export async function saveHomeworkRecords(id, records) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/homework/assignments/${id}/records`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ records })
+    })
+  }
+  return { success: true }
+}
+
+// 删除作业（连带明细并重算汇总）
+export async function deleteHomeworkAssignment(id) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/homework/assignments/${id}`, { method: 'DELETE' })
+  }
+  return { success: true }
+}
+
+// 批量录入作业数据
+// mode='summary'：rows = [{ 学号, 应交次数, 未交次数 }]
+// mode='detail' ：rows = [{ 作业标题, 科目, 日期, 学号, 状态 }]
+export async function importHomework(mode, rows) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/students/import-homework`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, rows })
+    })
+  }
+  return { success: true, imported: rows.length, skipped: 0, errors: [] }
+}

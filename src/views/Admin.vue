@@ -87,6 +87,12 @@
 2024001,月考1,数学,90
 2024002,月考1,语文,88</pre>
         </div>
+
+        <!-- 作业数据批量录入已归到「作业管理」，此处给出入口避免找不到 -->
+        <div class="tip-box" style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <span>作业提交数据的批量录入（汇总式 / 明细式 CSV）已移至「作业管理」页。</span>
+          <button class="btn outline sm" @click="$router.push('/homework')">前往作业管理 →</button>
+        </div>
       </div>
     </div>
 
@@ -219,6 +225,7 @@ import { getRole, getMustChangePwd, changePassword, updateTeacher, deleteTeacher
 import InviteManager from '../components/InviteManager.vue'
 import ParentManager from '../components/ParentManager.vue'
 import { getStudents, getClassrooms, createStudent, importStudents, importScores, getTeachers, createTeacher, updateStudent, deleteStudent } from '../api/student.js'
+import { readTextFile, downloadCSV } from '../utils/csv.js'
 
 const route = useRoute()
 const isAdmin = getRole() === 'admin'
@@ -274,23 +281,11 @@ async function loadTeachers() {
 }
 
 function downloadTemplate() {
-  const csv = '学号,姓名,班级,初始密码\n2024005,张三,高三(2)班,\n2024006,李四,高三(2)班,\n'
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = '学生导入模板.csv'
-  a.click()
-  URL.revokeObjectURL(a.href)
+  downloadCSV('学生导入模板.csv', '学号,姓名,班级,初始密码\n2024005,张三,高三(2)班,\n2024006,李四,高三(2)班,\n')
 }
 
 function downloadScoreTemplate() {
-  const csv = '学号,考试名称,科目,分数\n2024001,月考1,语文,85\n2024001,月考1,数学,90\n2024002,月考1,语文,88\n'
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = '成绩导入模板.csv'
-  a.click()
-  URL.revokeObjectURL(a.href)
+  downloadCSV('成绩导入模板.csv', '学号,考试名称,科目,分数\n2024001,月考1,语文,85\n2024001,月考1,数学,90\n2024002,月考1,语文,88\n')
 }
 
 async function onScoreFile(e) {
@@ -372,36 +367,12 @@ function parseCSV(text) {
   return rows
 }
 
-// GBK -> UTF-8 转换（处理 Excel 导出的 GBK CSV）
-function decodeGBK(buffer) {
-  try {
-    const decoder = new TextDecoder('gbk', { fatal: true })
-    return decoder.decode(buffer)
-  } catch (e) {
-    return null
-  }
-}
-
-// 检测并转换编码
-async function readFileAsText(file) {
-  const buffer = await file.arrayBuffer()
-  // 先尝试 UTF-8
-  try {
-    const utf8Text = new TextDecoder('utf-8', { fatal: true }).decode(buffer)
-    // 验证是否包含有效的中文
-    if (/[\u4e00-\u9fa5]/.test(utf8Text)) return utf8Text
-  } catch (e) {}
-  // UTF-8 失败，尝试 GBK
-  const gbkText = decodeGBK(buffer)
-  if (gbkText && /[\u4e00-\u9fa5]/.test(gbkText)) return gbkText
-  // 兜底：返回 UTF-8 解码结果（可能乱码）
-  return new TextDecoder('utf-8').decode(buffer)
-}
+// GBK -> UTF-8 转换（处理 Excel 导出的 GBK CSV）已统一到 src/utils/csv.js
 
 async function onFile(e) {
   const file = e.target.files[0]
   if (!file) return
-  const text = await readFileAsText(file)
+  const text = await readTextFile(file)
   const rows = parseCSV(text)
   if (!rows.length) { setMsg('未解析到有效数据，请检查 CSV 格式', 'err'); return }
   try {

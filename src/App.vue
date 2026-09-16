@@ -5,6 +5,7 @@
       <h1>学生成长档案</h1>
       <span class="spacer"></span>
       <router-link v-if="isStaff" to="/app">班级概览</router-link>
+      <router-link v-if="isStaff" to="/homework">作业管理</router-link>
       <router-link v-if="isParent" to="/parent">我的孩子</router-link>
       <router-link v-if="isStaff" to="/admin">管理</router-link>
       <span class="topbar-divider"></span>

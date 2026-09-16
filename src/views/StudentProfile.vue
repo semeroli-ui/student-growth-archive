@@ -2,12 +2,33 @@
   <div v-if="loading">加载中…</div>
   <div v-else-if="!student" class="card">未找到该学生档案。</div>
   <div v-else>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px" class="no-print">
+    <div class="page-head no-print">
       <a class="back" href="#/app" @click.prevent="$router.push('/app')">← 返回班级概览</a>
-      <span class="spacer" style="flex:1"></span>
-      <button class="btn outline" @click="exportPDF">
-        📄 导出PDF
+      <span class="spacer"></span>
+      <!-- 编辑模式开关：明确的文字 + 真实按钮，键盘可达（原先只是一个 opacity .65 的小徽标，几乎发现不了） -->
+      <button
+        v-if="isStaff"
+        class="edit-switch"
+        role="switch"
+        :aria-checked="String(editMode)"
+        :title="editMode ? '关闭编辑模式' : '开启后可修改行为评分、作业提交情况、成绩与时间线'"
+        @click="toggleEditMode"
+      >
+        <span class="switch-track" :class="{ on: editMode }"><span class="switch-thumb"></span></span>
+        <span class="switch-text">{{ editMode ? '编辑模式已开启' : '开启编辑模式' }}</span>
       </button>
+      <button class="btn outline" @click="exportPDF">📄 导出PDF</button>
+    </div>
+
+    <!-- 编辑模式提示条：只有开启后编辑入口才出现，平时保持干净只读态（家长查看 / 打印更清爽） -->
+    <div v-if="canEdit" class="edit-banner no-print">
+      <span class="edit-banner-icon">✏️</span>
+      <div>
+        <strong>编辑模式已开启</strong>
+        <div class="sub">可直接修改下方的课堂行为评分、作业提交情况、成绩与时间线记录。</div>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn sm" @click="editMode = false">完成编辑</button>
     </div>
 
     <!-- 学生头部 -->
@@ -26,7 +47,7 @@
           <span v-if="student.homework.total" class="hw-detail">
             已交 {{ student.homework.total - student.homework.missed }}/{{ student.homework.total }}
           </span>
-          <button v-if="isStaff" class="edit-badge" @click="openHomeworkEdit" title="编辑作业提交情况">✏️ 编辑</button>
+          <button v-if="canEdit" class="btn outline sm" @click="openHomeworkEdit">✏️ 编辑提交情况</button>
         </div>
       </div>
     </div>
@@ -34,19 +55,37 @@
     <!-- 图表区 -->
     <div class="grid cols-2">
       <div class="card">
-        <h2>成绩趋势 <span style="font-size:12px;color:var(--muted);font-weight:normal">（点击考试查看附件）</span></h2>
+        <h2>成绩趋势 <span class="h2-hint">（点击考试查看附件）</span></h2>
         <ScoreTrendChart :scores="student.scores" @exam-click="openExamDetail" />
       </div>
       <div class="card">
-        <h2>课堂行为雷达
-          <span v-if="isStaff" class="edit-badge" @click="openBehaviorEdit">✏️ 编辑</span>
+        <h2 class="card-head">
+          课堂行为雷达
+          <button v-if="canEdit" class="btn outline sm" @click="openBehaviorEdit">✏️ 编辑评分</button>
         </h2>
         <BehaviorRadar :behavior="student.behavior" />
       </div>
     </div>
 
-    <!-- 添加成绩（教师/管理员） -->
-    <div v-if="isStaff" class="card no-print">
+    <!-- 作业明细：来自「作业管理」的逐次记录，用于回答「哪几次没交」 -->
+    <div v-if="student.homeworkDetail && student.homeworkDetail.length" class="card">
+      <h2 class="card-head">
+        作业明细
+        <span class="h2-hint">最近 {{ student.homeworkDetail.length }} 次 · 可在「作业管理」中标记</span>
+      </h2>
+      <div class="hw-detail-list">
+        <div v-for="h in student.homeworkDetail" :key="h.id" class="hw-detail-row">
+          <span class="hw-detail-date">{{ h.dueDate }}</span>
+          <span class="hw-detail-title">{{ h.title }}</span>
+          <span v-if="h.subject" class="badge">{{ h.subject }}</span>
+          <span class="spacer"></span>
+          <span class="badge" :class="statusTone(h.status)">{{ statusLabel(h.status) }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 添加成绩（教师/管理员，需先开启编辑模式） -->
+    <div v-if="canEdit" class="card no-print">
       <h2>添加成绩</h2>
       <div class="score-form">
         <select v-model="scoreForm.subject" class="select">
@@ -207,7 +246,7 @@
     <div class="card">
       <h2>成长时间线</h2>
       <!-- 教师添加事件 -->
-      <div v-if="isStaff" class="event-form">
+      <div v-if="canEdit" class="event-form">
         <input v-model="eventForm.event_date" type="date" class="input" />
         <select v-model="eventForm.event_type" class="select">
           <option>奖励</option>
@@ -224,7 +263,7 @@
       <div class="timeline">
         <div v-for="(e, i) in student.events" :key="i" class="timeline-item">
           <div class="date">{{ e.date }} · <span class="badge" :class="{ warn: e.type==='提醒' }">{{ e.type }}</span>
-            <button v-if="isStaff" class="del-btn" @click="doDeleteEvent(i)" title="删除">×</button>
+            <button v-if="canEdit" class="del-btn" @click="doDeleteEvent(i)" title="删除">×</button>
           </div>
           <div>{{ e.content }}</div>
         </div>
@@ -250,6 +289,19 @@ const aiSource = ref('')
 const aiError = ref('')
 const subjects = ref([])
 const isStaff = getRole() === 'teacher' || getRole() === 'admin'
+
+// 编辑模式：默认关闭 → 页面为干净只读态；开启后才显示各类编辑入口。
+// 这样既解决了「编辑入口藏得太深找不到」，也避免平时误改数据。
+const editMode = ref(false)
+const canEdit = computed(() => isStaff && editMode.value)
+function toggleEditMode() { editMode.value = !editMode.value }
+
+// 作业明细状态展示
+const HW_STATUS_LABELS = { submitted: '已交', late: '补交', missing: '未交', exempt: '免交', pending: '待标记' }
+const HW_STATUS_TONES = { late: 'warn', missing: 'danger' }
+function statusLabel(s) { return HW_STATUS_LABELS[s] || s || '待标记' }
+function statusTone(s) { return HW_STATUS_TONES[s] || '' }
+
 const scoreForm = ref({ subject: '', exam_name: '', score: '', images: [] })
 const scoreLoading = ref(false)
 const scoreMsg = ref('')
@@ -437,8 +489,12 @@ async function doAddScore() {
 }
 
 async function exportPDF() {
+  // 打印前临时退出编辑模式，保证导出的是干净只读版式
+  const wasEditing = editMode.value
+  editMode.value = false
   await nextTick()
   window.print()
+  editMode.value = wasEditing
 }
 
 async function doAddEvent() {
@@ -557,20 +613,65 @@ async function doSaveHomework() {
 </script>
 
 <style scoped>
-/* === 编辑入口 === */
-.edit-badge {
-  font-size: 12px; cursor: pointer; opacity: .65;
-  padding: 3px 9px; border-radius: 6px;
-  border: 1px solid transparent;
-  background: var(--primary-light); color: var(--primary);
-  transition: opacity .15s, transform .15s, background .15s;
+/* =========================================================
+   页面头部 + 编辑模式开关
+   设计意图：把「能不能编辑」做成一个显式状态，
+   关闭时页面是干净只读态，开启后所有编辑入口才出现。
+   ========================================================= */
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+
+.edit-switch {
+  display: inline-flex; align-items: center; gap: 9px;
+  background: var(--card); border: 1.5px solid var(--line);
+  border-radius: 24px; padding: 6px 14px 6px 8px;
+  cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500;
+  color: var(--muted);
+  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
 }
-.edit-badge:hover { opacity: 1; transform: translateY(-1px); }
-.card h2 > .edit-badge { float: right; font-weight: 400; }
+.edit-switch:hover { border-color: var(--primary); color: var(--primary); }
+.edit-switch[aria-checked="true"] {
+  border-color: var(--primary); background: var(--primary-light); color: var(--primary);
+}
+.switch-track {
+  width: 34px; height: 20px; border-radius: 99px; background: #d7dce3;
+  position: relative; flex-shrink: 0; transition: background var(--transition-base);
+}
+.switch-track.on { background: var(--primary); }
+.switch-thumb {
+  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  transition: transform var(--transition-base);
+}
+.switch-track.on .switch-thumb { transform: translateX(14px); }
+
+/* 编辑模式提示条 */
+.edit-banner {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--primary-light); border: 1px solid rgba(47, 125, 110, .28);
+  border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px;
+}
+.edit-banner-icon { font-size: 18px; }
+.edit-banner strong { color: var(--primary-dark); font-size: 14px; }
+.edit-banner .sub { font-size: 12px; }
+
+/* 卡片标题 + 标题内的操作按钮 */
+.card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.card-head .btn { margin-left: auto; }
+.h2-hint { font-size: 12px; color: var(--muted); font-weight: 400; }
 
 /* === 作业提交率胶囊 === */
 .hw-pill { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hw-detail { font-size: 12px; color: var(--muted); }
+
+/* === 作业明细列表 === */
+.hw-detail-list { display: flex; flex-direction: column; }
+.hw-detail-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 0; border-bottom: 1px dashed var(--line);
+}
+.hw-detail-row:last-child { border-bottom: none; }
+.hw-detail-date { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 84px; }
+.hw-detail-title { font-size: 14px; }
 
 /* === 行为评分滑块 === */
 .behavior-field { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
