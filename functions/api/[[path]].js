@@ -97,10 +97,14 @@ async function handleListSubjects() {
 
 // ===== D1 查询函数 =====
 
-async function dbGetStudents(env, className) {
+async function dbGetStudents(env, className, onlyId) {
   let query = `SELECT u.id, u.name, u.class_name, u.role FROM users u WHERE u.role = 'student'`
   let params = []
-  if (className && className !== '全部班级') {
+  // onlyId：学生端只能取自己这一条（班级名单属于教师/管理员的管理数据）
+  if (onlyId) {
+    query += ` AND u.id = ?`
+    params.push(onlyId)
+  } else if (className && className !== '全部班级') {
     query += ` AND u.class_name = ?`
     params.push(className)
   }
@@ -1429,10 +1433,15 @@ export async function onRequest(context) {
 
   // 学生列表
   if (path === '/students' && method === 'GET') {
-    // 学生只看自己班级；教师/管理员：query参数优先，其次session班级；空/全部班级 → 查全部
-    const rawClass = user.role === 'student'
-      ? user.className
-      : (url.searchParams.get('class') || user.className)
+    // 信息隔离：学生端只能取到自己这一条。
+    // 班级名单、同学的作业提交率属于教师/管理员的管理数据，学生不应可见
+    // （原先学生登录后会拿到整个班级名单，等于把全班信息公开给学生）。
+    if (user.role === 'student') {
+      const me = await dbGetStudents(env, null, user.id)
+      return jsonResp(me)
+    }
+    // 教师/管理员：query 参数优先，其次 session 班级；空/全部班级 → 查全部
+    const rawClass = url.searchParams.get('class') || user.className
     const className = (!rawClass || rawClass === '全部班级') ? null : rawClass
     const students = await dbGetStudents(env, className)
     return jsonResp(students)

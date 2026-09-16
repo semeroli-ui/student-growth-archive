@@ -5,6 +5,7 @@
       <h1>学生成长档案</h1>
       <span class="spacer"></span>
       <router-link v-if="isStaff" to="/app">班级概览</router-link>
+      <router-link v-if="isStudent" to="/app">我的档案</router-link>
       <router-link v-if="isStaff" to="/homework">作业管理</router-link>
       <router-link v-if="isParent" to="/parent">我的孩子</router-link>
       <router-link v-if="isStaff" to="/admin">管理</router-link>
@@ -42,6 +43,7 @@ const isStaff = computed(() => {
   const r = getRole()
   return r === 'teacher' || r === 'admin'
 })
+const isStudent = computed(() => getRole() === 'student')
 const isParent = computed(() => isParentFn())
 const roleLabel = computed(() => {
   const r = getRole()
