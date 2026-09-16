@@ -165,3 +165,52 @@ npx wrangler kv key delete session:probe-abc123 --namespace-id <SESSIONS 的 id>
 打开 `src/api/student.js`：
 - 把 `USE_WORKER = false` 改为 `true`
 - 把 `WORKER_URL` 填成你的 CF 地址
+
+## 7. 全局编辑模式（改前端「哪里能改」时的第一步）
+
+全站只有一个编辑开关，在顶栏，由 `src/utils/editMode.js` 承载：
+
+```
+开启 → 成绩录入 / 行为评分 / 作业提交情况 / 作业管理 / 学生·教师·家长·邀请码管理
+        所有编辑入口出现
+关闭 → 以上入口全部收起，页面回到干净只读态（家长查看、投屏、打印都更清爽）
+```
+
+**改前端时请遵守这四条，否则会出现「开关关了还能改」的旁路：**
+
+1. **任何新的写入入口都要挂 `v-if="canEdit"`**，不要用 `v-if="isStaff"`。
+   `canEdit` 已经包含「教职工 + 开关已开」两层判断。
+   ```js
+   import { useEditMode } from '../utils/editMode.js'
+   const { editMode, canEdit, toggleEditMode } = useEditMode()
+   ```
+2. **写入类弹窗的 `v-if` 也要带 `canEdit`**（纵深防御），并在 `watch(editMode)` 里把
+   弹窗状态归零，避免残留一个还能点「保存」的窗。
+3. **只读时必须在页面上留一个 `.readonly-hint` 提示条 + 开启出口**。
+   历史上踩过的坑：编辑按钮被收起却没说原因，教师以为「系统不给编辑」。
+4. **不要把普通状态直接读 `localStorage` 塞进 `computed`**。
+   `localStorage` 不是响应式依赖，computed 首次求值后会永久缓存，开关点了没反应。
+   编辑态用 `sessionStorage` 存（关掉标签页即回到只读，不跨会话残留写权限）。
+
+学生 / 家长即使在开关打开时也永远只读 —— 这是前端双保险，后端另有 `requireTeacher` 兜底。
+
+## 8. 跑测试
+
+```bash
+cd student-growth-archive
+node tests/edit_mode_test.mjs        # 前端：全局编辑模式（61 项）
+```
+
+后端几套测试在仓库外的工作目录（因为 `functions/api/[[path]].js` 含方括号，
+必须先复制成普通文件名才能 import）：
+
+```bash
+node run_all_tests.mjs               # 一次跑完全部套件并汇总
+```
+
+覆盖范围：作业结构 / 生成列写入 / 降级（42）、路由注册（28）、
+角色 × 接口隔离矩阵（40）、作业接口（62）、全局编辑模式（61）。
+
+`edit_mode_test.mjs` 里除了逻辑测试，还有一份**结构断言表**：把「受管辖的写法」
+逐个列出来（例如 `v-if="canEdit" class="btn outline sm" @click="openHomeworkEdit"`）。
+新增写入按钮却忘了挂 `canEdit` 时，对应条目会失配，测试立刻失败 —— 这是防旁路的第一道网。

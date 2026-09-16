@@ -3,7 +3,15 @@
     <h2>家长账号管理</h2>
     <p class="sub">创建家长账号并关联其孩子。家长登录后仅可查看已关联孩子的档案（心理画像不展示）。</p>
 
-    <div class="gen-box">
+    <!-- 只读提示：创建 / 编辑 / 删除家长、关联孩子都属于写操作，受全局编辑模式管辖；
+         家长列表本身是只读信息，任何模式下都保留。 -->
+    <div v-if="!canEdit" class="readonly-hint">
+      <span class="rh-icon">🔒</span>
+      <span><span class="rh-strong">当前为只读模式</span>，创建、编辑、删除家长与关联孩子均已关闭，仍可查看下方家长列表。</span>
+      <button class="btn outline sm" @click="toggleEditMode">开启编辑模式</button>
+    </div>
+
+    <div v-else class="gen-box">
       <div class="row">
         <div class="field grow">
           <label>家长账号 *</label>
@@ -46,25 +54,28 @@
             </span>
           </td>
           <td class="ops">
-            <div class="op-row">
-              <button class="btn outline sm" @click="openEditParent(p)">编辑</button>
-              <button class="btn danger sm" @click="askDeleteParent(p)">删除</button>
-            </div>
-            <div class="op-row">
-              <select v-model="linkSel[p.id]" class="sel-sm">
-                <option value="">关联更多孩子…</option>
-                <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}（{{ s.className }}）</option>
-              </select>
-              <button class="btn outline sm" :disabled="!linkSel[p.id]" @click="doLink(p.id, linkSel[p.id])">+ 关联</button>
-            </div>
+            <template v-if="canEdit">
+              <div class="op-row">
+                <button class="btn outline sm" @click="openEditParent(p)">编辑</button>
+                <button class="btn danger sm" @click="askDeleteParent(p)">删除</button>
+              </div>
+              <div class="op-row">
+                <select v-model="linkSel[p.id]" class="sel-sm">
+                  <option value="">关联更多孩子…</option>
+                  <option v-for="s in students" :key="s.id" :value="s.id">{{ s.name }}（{{ s.className }}）</option>
+                </select>
+                <button class="btn outline sm" :disabled="!linkSel[p.id]" @click="doLink(p.id, linkSel[p.id])">+ 关联</button>
+              </div>
+            </template>
+            <span v-else class="sub">只读</span>
           </td>
         </tr>
         <tr v-if="!parents.length"><td colspan="4" class="sub" style="padding:16px">暂无家长账号</td></tr>
       </tbody>
     </table>
 
-    <!-- 编辑家长 模态 -->
-    <div v-if="showEditParent" class="modal-mask" @click.self="showEditParent = false">
+    <!-- 编辑家长 模态（同样受编辑模式管辖，做纵深防御） -->
+    <div v-if="showEditParent && canEdit" class="modal-mask" @click.self="showEditParent = false">
       <div class="modal">
         <h3>编辑家长</h3>
         <div class="field"><label>账号</label><input :value="editParentForm.account" class="input" disabled /></div>
@@ -89,6 +100,10 @@
 import { ref, reactive, onMounted } from 'vue'
 import { getParents, createParent, linkParentStudent, updateParent, deleteParent } from '../api/auth.js'
 import { getStudents } from '../api/student.js'
+import { useEditMode } from '../utils/editMode.js'
+
+// 家长账号的增删改与关联操作统一受全局编辑模式管辖。
+const { canEdit, toggleEditMode } = useEditMode()
 
 const parents = ref([])
 const students = ref([])

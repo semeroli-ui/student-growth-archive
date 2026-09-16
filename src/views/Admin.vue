@@ -19,6 +19,15 @@
 
     <div v-if="msg" :class="['msg', msgType]">{{ msg }}</div>
 
+    <!-- 只读提示：本页的写入入口（添加/导入/编辑/删除学生、教师账号、邀请码、家长绑定）
+         统一受顶栏那个全局「编辑模式」管辖。
+         「我的密码」属于账号安全，不属于「信息编辑」，因此不受此开关影响。 -->
+    <div v-if="!canEdit" class="readonly-hint">
+      <span class="rh-icon">🔒</span>
+      <span><span class="rh-strong">当前为只读模式</span>，添加 / 导入 / 编辑 / 删除类操作均已关闭（修改自己的密码不受影响）。</span>
+      <button class="btn sm outline" @click="toggleEditMode">开启编辑模式</button>
+    </div>
+
     <!-- ============ 学生管理 ============ -->
     <div v-show="tab === 'students'">
       <div class="card">
@@ -29,12 +38,16 @@
               <option value="">全部班级</option>
               <option v-for="c in classrooms" :key="c" :value="c">{{ c }}</option>
             </select>
-            <button class="btn" @click="showAdd = true">+ 单条添加</button>
-            <button class="btn outline" @click="downloadTemplate">下载模板</button>
-            <label class="btn outline">
-              批量导入
-              <input type="file" accept=".csv" hidden @change="onFile" />
-            </label>
+            <!-- 学生录入相关入口整组受编辑模式管辖。
+                 连「下载模板」一起收起，避免出现「能下模板却不能导入」的半截状态。 -->
+            <template v-if="canEdit">
+              <button class="btn" @click="showAdd = true">+ 单条添加</button>
+              <button class="btn outline" @click="downloadTemplate">下载模板</button>
+              <label class="btn outline">
+                批量导入
+                <input type="file" accept=".csv" hidden @change="onFile" />
+              </label>
+            </template>
           </div>
         </div>
 
@@ -46,19 +59,28 @@
               <div class="sub">{{ s.className }}</div>
             </div>
             <span class="badge" :class="{ warn: s.homeworkRate < 0.9 }">作业 {{ Math.round(s.homeworkRate * 100) }}%</span>
-            <div class="card-actions no-print">
+            <!-- 查看档案（整张卡片可点）在只读模式下依然可用，只收起改数据的按钮 -->
+            <div v-if="canEdit" class="card-actions no-print">
               <button class="btn outline sm" @click.stop="openEditStudent(s)">编辑</button>
               <button class="btn danger sm" @click.stop="askDeleteStudent(s)">删除</button>
             </div>
           </div>
-          <div v-if="!students.length" class="empty">暂无学生，点击「单条添加」或「批量导入」</div>
+          <div v-if="!students.length" class="empty">
+            {{ canEdit ? '暂无学生，点击「单条添加」或「批量导入」' : '暂无学生' }}
+          </div>
         </div>
       </div>
     </div>
 
     <!-- ============ 成绩导入 ============ -->
     <div v-show="tab === 'scores' && isStaff">
-      <div class="card">
+      <!-- 这个 tab 本身就是纯写入功能，只读时直接给出口，不留一个点了没用的空壳表单 -->
+      <div v-if="!canEdit" class="readonly-hint">
+        <span class="rh-icon">🔒</span>
+        <span><span class="rh-strong">成绩导入已关闭</span>：当前为只读模式，开启后才能批量导入成绩。</span>
+        <button class="btn sm outline" @click="toggleEditMode">开启编辑模式</button>
+      </div>
+      <div v-else class="card">
         <div class="row between">
           <h2>批量导入成绩</h2>
           <button class="btn outline" @click="downloadScoreTemplate">下载模板</button>
@@ -101,8 +123,9 @@
       <div class="card">
         <div class="row between">
           <h2>教师账号</h2>
-          <button class="btn" @click="showAddTeacher = true">+ 添加教师</button>
+          <button v-if="canEdit" class="btn" @click="showAddTeacher = true">+ 添加教师</button>
         </div>
+        <!-- 名单本身是只读信息，任何模式下都保留；只有改账号的按钮受编辑模式管辖 -->
         <table class="tbl">
           <thead>
             <tr><th>工号</th><th>姓名</th><th>角色</th><th>班级</th><th>状态</th><th>操作</th></tr>
@@ -115,8 +138,11 @@
               <td>{{ t.class_name }}</td>
               <td>{{ t.status === 'active' ? '正常' : t.status }}</td>
               <td>
-                <button class="btn outline sm" @click="openEditTeacher(t)">编辑</button>
-                <button class="btn danger sm" @click="askDeleteTeacher(t)">删除</button>
+                <template v-if="canEdit">
+                  <button class="btn outline sm" @click="openEditTeacher(t)">编辑</button>
+                  <button class="btn danger sm" @click="askDeleteTeacher(t)">删除</button>
+                </template>
+                <span v-else class="sub">只读</span>
               </td>
             </tr>
           </tbody>
@@ -150,6 +176,10 @@
       </div>
     </div>
 
+    <!-- 以下四个编辑弹窗统一受全局编辑模式管辖。
+         外层再包一层 canEdit 做纵深防御：万一将来新增入口漏了判断，
+         也不会出现「开关已关、弹窗却仍能提交」的旁路。 -->
+    <template v-if="canEdit">
     <!-- ============ 单条添加学生 模态 ============ -->
     <div v-if="showAdd" class="modal-mask" @click.self="showAdd = false">
       <div class="modal">
@@ -215,6 +245,7 @@
         </div>
       </div>
     </div>
+    </template>
   </div>
 </template>
 
@@ -226,6 +257,7 @@ import InviteManager from '../components/InviteManager.vue'
 import ParentManager from '../components/ParentManager.vue'
 import { getStudents, getClassrooms, createStudent, importStudents, importScores, getTeachers, createTeacher, updateStudent, deleteStudent } from '../api/student.js'
 import { readTextFile, downloadCSV } from '../utils/csv.js'
+import { useEditMode } from '../utils/editMode.js'
 
 const route = useRoute()
 const isAdmin = getRole() === 'admin'
@@ -259,6 +291,21 @@ const form = ref({ account: '', name: '', className: '', password: '' })
 const tForm = ref({ account: '', name: '', password: '', role: 'teacher', className: '' })
 const oldPwd = ref('')
 const newPwd = ref('')
+
+// 全局编辑模式：本页的增删改入口全部由它统一管辖。
+// 「我的密码」不属于信息编辑，因此不接这个闸门。
+const { editMode, canEdit, toggleEditMode } = useEditMode()
+
+// 关掉编辑模式时，把还开着的编辑弹窗一并收起 ——
+// 否则弹窗里的「保存」会成为绕过开关的旁路。
+watch(editMode, on => {
+  if (!on) {
+    showAdd.value = false
+    showAddTeacher.value = false
+    showEditStudent.value = false
+    showEditTeacher.value = false
+  }
+})
 
 // 成绩导入状态
 const scoreImportResult = ref(null)

@@ -5,22 +5,11 @@
     <div class="page-head no-print">
       <a class="back" href="#/app" @click.prevent="$router.push('/app')">← 返回班级概览</a>
       <span class="spacer"></span>
-      <!-- 编辑模式开关：明确的文字 + 真实按钮，键盘可达（原先只是一个 opacity .65 的小徽标，几乎发现不了） -->
-      <button
-        v-if="isStaff"
-        class="edit-switch"
-        role="switch"
-        :aria-checked="String(editMode)"
-        :title="editMode ? '收起所有编辑表单' : '展开成绩录入、时间线编辑等全部编辑表单；关闭时页面为干净只读态'"
-        @click="toggleEditMode"
-      >
-        <span class="switch-track" :class="{ on: editMode }"><span class="switch-thumb"></span></span>
-        <span class="switch-text">{{ editMode ? '编辑模式已开启' : '开启编辑模式' }}</span>
-      </button>
       <button class="btn outline" @click="exportPDF">📄 导出PDF</button>
     </div>
 
-    <!-- 编辑模式提示条：只有开启后编辑入口才出现，平时保持干净只读态（家长查看 / 打印更清爽） -->
+    <!-- 编辑态提示条：与顶栏那个全局开关是同一个状态，这里再明示一次并提供「就地退出」，
+         免得用户在长页面里往下翻之后忘了自己正处于可编辑态。 -->
     <div v-if="canEdit" class="edit-banner no-print">
       <span class="edit-banner-icon">✏️</span>
       <div>
@@ -28,7 +17,16 @@
         <div class="sub">可直接修改下方的课堂行为评分、作业提交情况、成绩与时间线记录。</div>
       </div>
       <span class="spacer"></span>
-      <button class="btn sm" @click="editMode = false">完成编辑</button>
+      <button class="btn sm" @click="toggleEditMode">完成编辑</button>
+    </div>
+
+    <!-- 只读态提示：编辑入口是被「全局编辑模式」统一收起的，这里必须给出明确出口。
+         上一版把编辑按钮藏在开关后面却没告诉教师开关在哪，导致「以为系统不给编辑」，
+         所以只读态不允许静默 —— 一定要说清为什么看不到入口、以及怎么打开。 -->
+    <div v-else-if="isStaff" class="readonly-hint no-print">
+      <span class="rh-icon">🔒</span>
+      <span><span class="rh-strong">当前为只读模式</span>，成绩录入、行为评分、时间线编辑等入口已隐藏。</span>
+      <button class="btn sm outline" @click="toggleEditMode">开启编辑模式</button>
     </div>
 
     <!-- 学生头部 -->
@@ -47,7 +45,7 @@
           <span v-if="student.homework.total" class="hw-detail">
             已交 {{ student.homework.total - student.homework.missed }}/{{ student.homework.total }}
           </span>
-          <button v-if="isStaff" class="btn outline sm" @click="startHomeworkEdit">✏️ 编辑提交情况</button>
+          <button v-if="canEdit" class="btn outline sm" @click="openHomeworkEdit">✏️ 编辑提交情况</button>
         </div>
       </div>
     </div>
@@ -61,7 +59,7 @@
       <div class="card">
         <h2 class="card-head">
           课堂行为雷达
-          <button v-if="isStaff" class="btn outline sm" @click="startBehaviorEdit">✏️ 编辑评分</button>
+          <button v-if="canEdit" class="btn outline sm" @click="openBehaviorEdit">✏️ 编辑评分</button>
         </h2>
         <BehaviorRadar :behavior="student.behavior" />
       </div>
@@ -143,7 +141,7 @@
     </div>
 
     <!-- 行为评分编辑弹窗 -->
-    <div v-if="behaviorEditing" class="modal-overlay" @click.self="behaviorEditing=false">
+    <div v-if="behaviorEditing && canEdit" class="modal-overlay" @click.self="behaviorEditing=false">
       <div class="modal">
         <div class="modal-head">
           <h3>编辑课堂行为评分</h3>
@@ -166,7 +164,7 @@
     </div>
 
     <!-- 作业提交情况编辑弹窗 -->
-    <div v-if="homeworkEditing" class="modal-overlay" @click.self="homeworkEditing=false">
+    <div v-if="homeworkEditing && canEdit" class="modal-overlay" @click.self="homeworkEditing=false">
       <div class="modal">
         <div class="modal-head">
           <h3>编辑作业提交情况</h3>
@@ -273,10 +271,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent, updateBehavior, updateHomework } from '../api/student.js'
 import { getRole } from '../api/auth.js'
+import { useEditMode, setEditMode } from '../utils/editMode.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
 
@@ -290,11 +289,18 @@ const aiError = ref('')
 const subjects = ref([])
 const isStaff = getRole() === 'teacher' || getRole() === 'admin'
 
-// 编辑模式：默认关闭 → 页面为干净只读态；开启后才显示各类编辑入口。
-// 这样既解决了「编辑入口藏得太深找不到」，也避免平时误改数据。
-const editMode = ref(false)
-const canEdit = computed(() => isStaff && editMode.value)
-function toggleEditMode() { editMode.value = !editMode.value }
+// 编辑权限来自全局开关（顶栏那个），本页不再自己维护第二份状态。
+// canEdit = 教职工 且 编辑模式已开启；学生/家长在这个 computed 里就被挡住了。
+const { editMode, canEdit, toggleEditMode } = useEditMode()
+
+// 关闭编辑模式时，若还有编辑弹窗开着，一并收起。
+// 否则会出现「开关已关，弹窗里的保存按钮仍可提交」的旁路。
+watch(editMode, on => {
+  if (!on) {
+    behaviorEditing.value = false
+    homeworkEditing.value = false
+  }
+})
 
 // 作业明细状态展示
 const HW_STATUS_LABELS = { submitted: '已交', late: '补交', missing: '未交', exempt: '免交', pending: '待标记' }
@@ -489,12 +495,13 @@ async function doAddScore() {
 }
 
 async function exportPDF() {
-  // 打印前临时退出编辑模式，保证导出的是干净只读版式
+  // 打印前临时退出编辑模式，保证导出的是干净只读版式。
+  // window.print() 是同步阻塞的，所以紧接着还原即可，用户感知不到这次切换。
   const wasEditing = editMode.value
-  editMode.value = false
+  setEditMode(false)
   await nextTick()
   window.print()
-  editMode.value = wasEditing
+  setEditMode(wasEditing)
 }
 
 async function doAddEvent() {
@@ -570,15 +577,12 @@ async function doSaveBehavior() {
   }
 }
 
-// ========== 编辑模式：一键收起 / 自动进入 ==========
-// 编辑模式的定位从「进入编辑的关卡」改为「一键收起所有编辑表单」：
-// 点编辑按钮本身就表达了明确的编辑意图，直接开始编辑即可，不必先找到并打开开关。
-// （原先编辑按钮藏在编辑模式之后，教师看不到入口，误以为「无法编辑」。）
-function ensureEditMode() {
-  if (!editMode.value) editMode.value = true
-}
-function startHomeworkEdit() { ensureEditMode(); openHomeworkEdit() }
-function startBehaviorEdit() { ensureEditMode(); openBehaviorEdit() }
+// ========== 编辑入口与全局开关的关系 ==========
+// 本页所有编辑按钮都由顶栏那个全局「编辑模式」开关统一管辖：
+//   开启 → 按钮出现，点开即编辑；
+//   关闭 → 按钮消失，页头给出只读提示与「开启编辑模式」出口。
+// 这里刻意不做「点编辑按钮时偷偷自动开启编辑模式」：那会让「关闭」形同虚设，
+// 也违背「一个开关管全站」的约定。可发现性改由「顶栏常驻开关 + 页头只读提示」保证。
 
 // ========== 作业提交情况编辑 ==========
 function openHomeworkEdit() {
@@ -624,37 +628,16 @@ async function doSaveHomework() {
 
 <style scoped>
 /* =========================================================
-   页面头部 + 编辑模式开关
-   设计意图：把「能不能编辑」做成一个显式状态，
-   关闭时页面是干净只读态，开启后所有编辑入口才出现。
+   页面头部 + 编辑态提示条
+   页面内不再放第二个开关 —— 全站只有一个，在顶栏。
+   这里只负责把当前状态说清楚：可编辑时给「完成编辑」出口，
+   只读时给「开启编辑模式」出口。
    ========================================================= */
 .page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
 
-.edit-switch {
-  display: inline-flex; align-items: center; gap: 9px;
-  background: var(--card); border: 1.5px solid var(--line);
-  border-radius: 24px; padding: 6px 14px 6px 8px;
-  cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500;
-  color: var(--muted);
-  transition: border-color var(--transition-fast), color var(--transition-fast), background var(--transition-fast);
-}
-.edit-switch:hover { border-color: var(--primary); color: var(--primary); }
-.edit-switch[aria-checked="true"] {
-  border-color: var(--primary); background: var(--primary-light); color: var(--primary);
-}
-.switch-track {
-  width: 34px; height: 20px; border-radius: 99px; background: #d7dce3;
-  position: relative; flex-shrink: 0; transition: background var(--transition-base);
-}
-.switch-track.on { background: var(--primary); }
-.switch-thumb {
-  position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
-  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
-  transition: transform var(--transition-base);
-}
-.switch-track.on .switch-thumb { transform: translateX(14px); }
-
-/* 编辑模式提示条 */
+/* 编辑模式提示条
+   （对应的只读提示条 .readonly-hint 定义在全局 main.css，
+     因为作业管理、学生管理等页面要用同一套说法与外观） */
 .edit-banner {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   background: var(--primary-light); border: 1px solid rgba(47, 125, 110, .28);

@@ -15,12 +15,22 @@
             <option v-for="c in classrooms" :key="c" :value="c">{{ c }}</option>
           </select>
           <span v-else-if="classrooms.length" class="class-chip">班级：{{ classrooms[0] }}</span>
-          <button class="btn outline" @click="showImport = !showImport">
-            📥 批量录入
-          </button>
-          <button class="btn primary" @click="openCreate">＋ 新建作业</button>
+          <!-- 本页所有写入类入口统一受全局「编辑模式」管辖：只读时整组收起 -->
+          <template v-if="canEdit">
+            <button class="btn outline" @click="showImport = !showImport">
+              📥 批量录入
+            </button>
+            <button class="btn primary" @click="openCreate">＋ 新建作业</button>
+          </template>
         </div>
       </div>
+    </div>
+
+    <!-- 只读提示：写入口是被全局开关收起的，必须说清原因并给出开启出口 -->
+    <div v-if="!canEdit" class="readonly-hint">
+      <span class="rh-icon">🔒</span>
+      <span><span class="rh-strong">当前为只读模式</span>，新建作业、标记提交情况、删除、批量录入均已关闭。</span>
+      <button class="btn sm outline" @click="toggleEditMode">开启编辑模式</button>
     </div>
 
     <!-- ============ 统计概览 ============ -->
@@ -40,7 +50,7 @@
     </div>
 
     <!-- ============ 批量录入（CSV） ============ -->
-    <div v-if="showImport" class="card">
+    <div v-if="showImport && canEdit" class="card">
       <div class="row between">
         <h2 style="margin:0">批量录入作业数据</h2>
         <button class="modal-close" title="收起" @click="showImport = false">✕</button>
@@ -104,7 +114,8 @@
       <div v-if="!loading && !list.length && !loadError" class="empty-state">
         <div class="empty-icon">📋</div>
         <p>还没有作业记录</p>
-        <p class="sub">点击右上角「新建作业」，选择班级与截止日期后即可逐个标记谁交了、谁没交</p>
+        <p v-if="canEdit" class="sub">点击右上角「新建作业」，选择班级与截止日期后即可逐个标记谁交了、谁没交</p>
+        <p v-else class="sub">开启编辑模式后，即可新建作业并逐个标记提交情况</p>
       </div>
 
       <div v-for="a in list" :key="a.id" class="hw-card">
@@ -113,8 +124,10 @@
           <span v-if="a.subject" class="badge">{{ a.subject }}</span>
           <span class="hw-date">截止 {{ a.dueDate }}</span>
           <span class="spacer"></span>
-          <button class="btn outline sm" @click="openMark(a)">标记提交情况</button>
-          <button class="btn danger sm" @click="askDelete(a)">删除</button>
+          <template v-if="canEdit">
+            <button class="btn outline sm" @click="openMark(a)">标记提交情况</button>
+            <button class="btn danger sm" @click="askDelete(a)">删除</button>
+          </template>
         </div>
 
         <!-- 提交进度 -->
@@ -152,7 +165,7 @@
     </div>
 
     <!-- ============ 新建作业 ============ -->
-    <div v-if="showCreate" class="modal-overlay" @click.self="showCreate = false">
+    <div v-if="showCreate && canEdit" class="modal-overlay" @click.self="showCreate = false">
       <div class="modal">
         <div class="modal-head">
           <h3>新建作业</h3>
@@ -194,7 +207,7 @@
     </div>
 
     <!-- ============ 标记提交情况 ============ -->
-    <div v-if="markOpen" class="modal-overlay" @click.self="closeMark">
+    <div v-if="markOpen && canEdit" class="modal-overlay" @click.self="closeMark">
       <div class="modal modal-wide">
         <div class="modal-head">
           <h3>{{ markAssignment?.title }} <span class="sub">· {{ markAssignment?.dueDate }}</span></h3>
@@ -256,18 +269,33 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { getRole } from '../api/auth.js'
 import {
   getClassrooms, getSubjects, getHomeworkAssignments, createHomeworkAssignment,
   getHomeworkAssignment, saveHomeworkRecords, deleteHomeworkAssignment, importHomework
 } from '../api/student.js'
 import { readTextFile, parseCSV, headerHas, downloadCSV } from '../utils/csv.js'
+import { useEditMode } from '../utils/editMode.js'
 
 const isAdmin = getRole() === 'admin'
 const classrooms = ref([])
 const subjects = ref([])
 const classFilter = ref('')
+
+// 写入类操作（新建作业 / 标记提交 / 删除 / CSV 导入）统一受全局编辑模式管辖。
+// 本页原本没有任何编辑开关，教师在这里可以随时改数据 —— 现在与全站一致。
+const { editMode, canEdit, toggleEditMode } = useEditMode()
+
+// 关闭编辑模式时收起所有写入类弹窗与面板。
+// 不这样做的话，开关关了但弹窗还开着，里面的保存按钮仍是一个可用的旁路。
+watch(editMode, on => {
+  if (!on) {
+    showCreate.value = false
+    showImport.value = false
+    markOpen.value = false
+  }
+})
 
 const list = ref([])
 const loading = ref(false)

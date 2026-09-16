@@ -231,10 +231,68 @@ body {
 }
 .logout-btn:hover { background: rgba(255,255,255,0.25); }
 
+/* ---------------------------------------------------------
+   全局编辑模式开关（顶栏）
+   OFF：半透明胶囊，低调地表示「当前只读」
+   ON ：实心白底 + 主色文字，强烈提示「数据现在可改」
+   这样即使切到别的页面，也能一眼确认自己处在哪种模式。
+   --------------------------------------------------------- */
+.edit-toggle {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 4px 12px 4px 8px; border-radius: 99px;
+  background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.24);
+  color: #fff; font-family: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer; white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast),
+              border-color var(--transition-fast);
+}
+.edit-toggle:hover { background: rgba(255,255,255,0.26); }
+.edit-toggle.on {
+  background: #fff; border-color: #fff; color: var(--primary-dark);
+  box-shadow: 0 2px 10px rgba(0,0,0,.16);
+}
+.edit-toggle.on:hover { background: #fff; }
+
+.et-text { font-variant-numeric: tabular-nums; }
+
+.et-track {
+  width: 30px; height: 17px; border-radius: 99px; position: relative;
+  background: rgba(255,255,255,0.28); flex-shrink: 0;
+  transition: background var(--transition-base);
+}
+.et-track.on { background: var(--primary); }
+.et-thumb {
+  position: absolute; top: 2px; left: 2px; width: 13px; height: 13px;
+  border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,.3);
+  transition: transform var(--transition-base);
+}
+.et-track.on .et-thumb { transform: translateX(13px); }
+
+/* ---------------------------------------------------------
+   只读提示条：只读模式下，页面里本该出现编辑入口的位置
+   用这条提示告诉用户「为什么看不到编辑按钮」+「怎么打开」。
+   （上一版的教训：编辑入口藏在开关后面，教师找不到入口，
+     误以为系统不给编辑。所以只读态必须给出明确的出口。）
+   --------------------------------------------------------- */
+.readonly-hint {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--card); border: 1px dashed #cfd8e3;
+  border-radius: var(--radius); padding: 10px 16px; margin-bottom: 16px;
+  font-size: 13px; color: var(--muted);
+}
+.readonly-hint .rh-icon { font-size: 15px; }
+.readonly-hint .rh-strong { color: var(--text); font-weight: 600; }
+
 @media (max-width: 768px) {
   .topbar { flex-wrap: wrap; gap: 8px; padding: 12px 16px; }
   .topbar h1 { font-size: 18px; }
   .user-name { display: none; }
+  /* 移动端顶栏会换行，编辑开关收紧一点；文字保留，否则只剩一个滑块看不出含义 */
+  .edit-toggle { padding: 4px 10px 4px 7px; font-size: 12px; gap: 6px; }
+  .edit-toggle .et-track { width: 26px; height: 15px; }
+  .edit-toggle .et-thumb { width: 11px; height: 11px; }
+  .et-track.on .et-thumb { transform: translateX(11px); }
 }
 
 /* =========================================================

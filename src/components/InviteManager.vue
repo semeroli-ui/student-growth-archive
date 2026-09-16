@@ -3,7 +3,15 @@
     <h2>邀请码管理</h2>
     <p class="sub">生成邀请码后，教师可用邀请码在登录页自助注册开户（单码单次有效）。</p>
 
-    <div class="gen-box">
+    <!-- 只读提示：生成 / 撤销邀请码属于写操作，受全局编辑模式管辖；
+         邀请码列表本身是只读信息，任何模式下都保留。 -->
+    <div v-if="!canEdit" class="readonly-hint">
+      <span class="rh-icon">🔒</span>
+      <span><span class="rh-strong">当前为只读模式</span>，生成与撤销邀请码均已关闭，仍可查看下方已有邀请码。</span>
+      <button class="btn outline sm" @click="toggleEditMode">开启编辑模式</button>
+    </div>
+
+    <div v-else class="gen-box">
       <div class="row">
         <div class="field">
           <label>班级（教师必填）</label>
@@ -48,7 +56,7 @@
           <td>{{ c.used_by || '—' }}</td>
           <td>{{ fmt(c.expires_at) }}</td>
           <td>
-            <button v-if="!c.used" class="btn outline sm" :disabled="revoking" @click="doRevoke(c.code)">撤销</button>
+            <button v-if="!c.used && canEdit" class="btn outline sm" :disabled="revoking" @click="doRevoke(c.code)">撤销</button>
           </td>
         </tr>
         <tr v-if="!codes.length"><td colspan="6" class="sub" style="padding:16px">暂无邀请码</td></tr>
@@ -60,6 +68,10 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getInviteCodes, createInviteCodes, revokeInviteCode } from '../api/auth.js'
+import { useEditMode } from '../utils/editMode.js'
+
+// 生成 / 撤销邀请码是写操作，统一受全局编辑模式管辖（只读时按钮收起）。
+const { canEdit, toggleEditMode } = useEditMode()
 
 const codes = ref([])
 const newCodes = ref([])
