@@ -117,9 +117,14 @@ async function dbGetStudents(env, className, onlyId) {
       `SELECT exam_name, subject, score, images FROM scores WHERE student_id = ? ORDER BY id DESC LIMIT 3`
     ).bind(s.id).all()
 
-    const homework = await env.DB.prepare(
-      `SELECT total, missed, rate FROM homework WHERE student_id = ?`
-    ).bind(s.id).first()
+    // 汇总表尚未建立（全新部署、尚未录入过作业数据）时静默降级为 0，
+    // 不能让「一个功能没数据」升级成「班级概览整页 500」。
+    let homework = null
+    try {
+      homework = await env.DB.prepare(
+        `SELECT total, missed, rate FROM homework WHERE student_id = ?`
+      ).bind(s.id).first()
+    } catch { homework = null }
 
     const examMap = {}
     for (const r of lastExam.results || []) {
@@ -157,9 +162,13 @@ async function dbGetStudent(env, id) {
   }
   const scores = Object.values(examMap)
 
-  const homework = await env.DB.prepare(
-    `SELECT total, missed, rate FROM homework WHERE student_id = ?`
-  ).bind(id).first() || { rate: 0, missed: 0, total: 0 }
+  let homework = null
+  try {
+    homework = await env.DB.prepare(
+      `SELECT total, missed, rate FROM homework WHERE student_id = ?`
+    ).bind(id).first()
+  } catch { homework = null }
+  homework = homework || { rate: 0, missed: 0, total: 0 }
 
   // 作业明细（明细模型启用后才有数据；表尚未创建时静默降级为空数组）
   let homeworkDetail = []
@@ -867,10 +876,20 @@ async function handleUpdateBehavior(request, env, teacher, studentId) {
 }
 
 // ===== 作业提交情况编辑 =====
-// 教师录入/更新学生作业提交统计：total 应交次数，missed 未交次数，rate 自动计算
+// 教师录入/更新学生作业提交统计：total 应交次数，missed 未交次数，rate 由数据库计算
 async function handleUpdateHomework(request, env, teacher, studentId) {
-  const target = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(studentId).first()
+  const target = await env.DB.prepare(
+    `SELECT id, name, class_name FROM users WHERE id = ? AND role = 'student'`
+  ).bind(studentId).first()
   if (!target) return jsonResp({ error: '学生不存在' }, 404)
+
+  // 班级范围：教师仅限本人班级（管理员、未设班级或「全部班级」的账号不受限）
+  if (teacherOutOfScope(teacher, target.class_name)) {
+    return jsonResp({
+      error: `${target.name || '该学生'}不在你负责的班级（${target.class_name || '未设置'}），无法修改；管理员账号不受此限制`,
+      code: 'CLASS_OUT_OF_SCOPE'
+    }, 403)
+  }
 
   let body
   try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
@@ -881,24 +900,15 @@ async function handleUpdateHomework(request, env, teacher, studentId) {
   if (!Number.isInteger(missed) || missed < 0) return jsonResp({ error: '未交次数必须是不小于 0 的整数' }, 400)
   if (missed > total) return jsonResp({ error: '未交次数不能超过应交次数' }, 400)
 
-  const rate = total === 0 ? 0 : (total - missed) / total
-
-  // UPSERT
-  const existing = await env.DB.prepare(
-    `SELECT student_id FROM homework WHERE student_id = ?`
-  ).bind(studentId).first()
-
-  if (existing) {
-    await env.DB.prepare(
-      `UPDATE homework SET total = ?, missed = ?, rate = ?, updated_at = datetime('now') WHERE student_id = ?`
-    ).bind(total, missed, rate, studentId).run()
-  } else {
-    await env.DB.prepare(
-      `INSERT INTO homework (student_id, total, missed, rate) VALUES (?, ?, ?, ?)`
-    ).bind(studentId, total, missed, rate).run()
+  try {
+    // 统一走 writeHomeworkSummary：它知道 rate 在现网是生成列、不能写。
+    const saved = await writeHomeworkSummary(env, studentId, total, missed)
+    return jsonResp({ success: true, ...saved })
+  } catch (e) {
+    // 这里刻意把底层错误原文回传：本接口只有教师/管理员可调用，
+    // 而写库失败时前端只能显示「请求失败: 500」，对排查毫无信息量。
+    return jsonResp({ error: '保存失败：' + (e && e.message ? e.message : String(e)) }, 500)
   }
-
-  return jsonResp({ success: true, rate })
 }
 
 // ===== 作业明细模型（每次作业 × 每人提交状态）=====
@@ -975,6 +985,36 @@ async function ensureHomeworkTables(env) {
   __hwTablesReady = true
 }
 
+// 汇总表的自愈 DDL。结构刻意与现网 homework 表保持一致：
+// rate 用 STORED 生成列（口径单一，不可能与 total/missed 不一致），
+// 于是「新库」和「现网库」走完全相同的代码路径，不会出现只在一边能跑的写法。
+const HOMEWORK_SUMMARY_DDL = [
+  `CREATE TABLE IF NOT EXISTS homework (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     student_id TEXT NOT NULL,
+     total INTEGER NOT NULL DEFAULT 0,
+     missed INTEGER NOT NULL DEFAULT 0,
+     rate REAL GENERATED ALWAYS AS (
+       CASE WHEN total > 0 THEN (total - missed) * 1.0 / total ELSE 0 END
+     ) STORED,
+     updated_at TEXT DEFAULT (datetime('now'))
+   )`,
+  // 一人一行。现网这张表没有唯一约束，一旦出现重复行，
+  // 「按 student_id 取一行」就会变成随机取，因此补上并忽略失败（存量重复行时建不上）。
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_hw_summary_student ON homework (student_id)`
+]
+
+let __hwSummaryReady = false
+// 写汇总前调用：保证 homework 表及其唯一索引存在（D1 没有迁移框架，采用首次使用时自愈）
+async function ensureHomeworkSchema(env) {
+  await ensureHomeworkTables(env)
+  if (__hwSummaryReady) return
+  for (const sql of HOMEWORK_SUMMARY_DDL) {
+    try { await env.DB.prepare(sql).run() } catch { /* 索引可能因存量重复行建不上，不影响主流程 */ }
+  }
+  __hwSummaryReady = true
+}
+
 // 班级维度的可见范围：管理员可跨班（class= 空 → 全部），教师仅限本人班级
 function resolveHomeworkScope(user, url) {
   const q = String(url.searchParams.get('class') || '').trim()
@@ -999,21 +1039,108 @@ async function dbGetClassStudents(env, className) {
   return results || []
 }
 
-async function upsertHomeworkSummary(env, studentId, total, missed) {
-  const rate = total === 0 ? 0 : (total - missed) / total
-  const existing = await env.DB.prepare(
-    `SELECT student_id FROM homework WHERE student_id = ?`
-  ).bind(studentId).first()
-  if (existing) {
-    await env.DB.prepare(
-      `UPDATE homework SET total = ?, missed = ?, rate = ?, updated_at = datetime('now') WHERE student_id = ?`
-    ).bind(total, missed, rate, studentId).run()
-  } else {
-    await env.DB.prepare(
-      `INSERT INTO homework (student_id, total, missed, rate) VALUES (?, ?, ?, ?)`
-    ).bind(studentId, total, missed, rate).run()
+// ===== homework 汇总表写入（全项目唯一入口）=====
+// 现网 homework 表的 rate 是 STORED 生成列（GENERATED ALWAYS AS (...) STORED），
+// 由数据库计算，任何 UPDATE/INSERT 写入它都会直接抛错：
+//   cannot UPDATE generated column "rate": SQLITE_ERROR [code: 7500]
+// 这正是「教师保存作业提交率 → 请求失败: 500」的根因，而且它同时影响
+// 明细点名回写、CSV 批量导入等所有写汇总的路径。
+//
+// 判定方式：SQLite 的 PRAGMA table_info 不列出生成列（生成的列只在 table_xinfo 里），
+// 所以「列清单里有没有 rate」恰好可以区分：
+//   有 rate → 普通列，需要我们自己写；
+//   无 rate → 生成列（或该列不存在），绝不能写。
+// 这样同一份代码在两种表结构上都是对的。
+// 按库缓存：同一个 isolate 里可能拿到不同的 DB 绑定（如多环境/测试），
+// 用 WeakMap 以 env.DB 为键，避免把 A 库的表结构套用到 B 库上。
+const __hwSummaryShapeCache = new WeakMap()
+async function homeworkSummaryShape(env) {
+  const cached = env.DB ? __hwSummaryShapeCache.get(env.DB) : null
+  if (cached) return cached
+
+  let cols = []
+  try {
+    const { results } = await env.DB.prepare(`PRAGMA table_info(homework)`).all()
+    cols = (results || []).map(r => String(r.name))
+  } catch { cols = [] }
+
+  let ddl = ''
+  try {
+    const row = await env.DB.prepare(
+      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'homework'`
+    ).first()
+    ddl = row?.sql || ''
+  } catch { ddl = '' }
+
+  const listed = cols.includes('rate')
+  const definedInDdl = /[(,\s]rate\s+[A-Za-z]/i.test(ddl)
+  // 生成列不出现在 table_info 里（D1 与本地 SQLite 一致，已实测），
+  // 所以「建表语句定义了 rate、列清单里却没有」= 它是生成列 → 绝不能写。
+  const rateIsGenerated = !listed && definedInDdl
+
+  const shape = {
+    exists: cols.length > 0,
+    hasRateColumn: listed && !rateIsGenerated,
+    hasUpdatedAt: cols.includes('updated_at')
   }
-  return rate
+  if (env.DB) __hwSummaryShapeCache.set(env.DB, shape)
+  return shape
+}
+
+// 写入后回读，返回数据库里的真实值。
+// rate 一律以数据库为准，不由服务端或前端自己算（两边算法一旦漂移就会显示不一致）。
+async function writeHomeworkSummary(env, studentId, total, missed) {
+  await ensureHomeworkSchema(env)
+  const shape = await homeworkSummaryShape(env)
+  const rate = total === 0 ? 0 : (total - missed) / total
+
+  const sets = ['total = ?', 'missed = ?']
+  const args = [total, missed]
+  if (shape.hasRateColumn) { sets.push('rate = ?'); args.push(rate) }
+  if (shape.hasUpdatedAt) sets.push(`updated_at = datetime('now')`)
+
+  const upd = await env.DB.prepare(
+    `UPDATE homework SET ${sets.join(', ')} WHERE student_id = ?`
+  ).bind(...args, studentId).run()
+
+  // 没有命中任何行才插入（不用 ON CONFLICT：现存表未必有 student_id 唯一索引）
+  if (!(upd.meta && upd.meta.changes > 0)) {
+    const cols = ['student_id', 'total', 'missed']
+    const marks = ['?', '?', '?']
+    const vals = [studentId, total, missed]
+    if (shape.hasRateColumn) { cols.push('rate'); marks.push('?'); vals.push(rate) }
+    await env.DB.prepare(
+      `INSERT INTO homework (${cols.join(', ')}) VALUES (${marks.join(', ')})`
+    ).bind(...vals).run()
+  }
+
+  const back = await env.DB.prepare(
+    `SELECT total, missed, rate FROM homework WHERE student_id = ?`
+  ).bind(studentId).first()
+
+  return {
+    total: back?.total ?? total,
+    missed: back?.missed ?? missed,
+    rate: back?.rate ?? rate
+  }
+}
+
+// 兼容旧调用点：明细回写、CSV 导入都经由此函数写汇总
+async function upsertHomeworkSummary(env, studentId, total, missed) {
+  const saved = await writeHomeworkSummary(env, studentId, total, missed)
+  return saved.rate
+}
+
+// 教师班级范围判定：只有「双方都明确有班级且不一致」才阻断。
+// 教师未设班级 / 「全部班级」→ 不限；学生未分班 → 没有可比较的对象，不阻断
+// （否则一个还没分班的学生会让教师完全没法为他录入作业）。
+function teacherOutOfScope(user, studentClassName) {
+  if (!user || user.role === 'admin') return false
+  const mine = String(user.className || '').trim()
+  const theirs = String(studentClassName || '').trim()
+  if (!mine || mine === '全部班级') return false
+  if (!theirs || theirs === '全部班级') return false
+  return normalizeClassName(mine) !== normalizeClassName(theirs)
 }
 
 // 由明细回写汇总。allowZero=false 时，没有任何已标记记录的学生保留原有手工汇总值，
