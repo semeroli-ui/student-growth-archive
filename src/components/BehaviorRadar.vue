@@ -38,7 +38,7 @@ function render() {
     radar: {
       indicator: indicators,
       radius: '65%',
-      axisName: { color: '#8a94a6', fontSize: 12 },
+      axisName: { color: '#6b7686', fontSize: 12 },
       splitLine: { lineStyle: { color: '#e8ecf1' } },
       splitArea: { areaStyle: { color: ['#ffffff', '#fafbfc'] } },
       axisLine: { lineStyle: { color: '#e8ecf1' } }
@@ -58,7 +58,7 @@ function render() {
       type: 'text',
       left: 'center',
       bottom: 6,
-      style: { text: '暂无评分数据，教师可在右上角「编辑」录入', fill: '#8a94a6', fontSize: 12 }
+      style: { text: '暂无评分数据，教师可在右上角「编辑」录入', fill: '#6b7686', fontSize: 12 }
     }]
   }, true)
 }
