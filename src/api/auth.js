@@ -1,6 +1,8 @@
 // 认证 API 层
 // 管理登录、登出、token 存储、角色判断、改密
 
+import { ref } from 'vue'
+
 const USE_WORKER = true   // ← 与 student.js 同步切换
 // Pages Functions 同源部署，/api 前缀由后端路由自行 strip
 const API_BASE = ''
@@ -10,17 +12,56 @@ const TOKEN_KEY = 'sga_token'
 const ROLE_KEY = 'sga_role'
 const USER_KEY = 'sga_user'
 
+// 会话的运行时唯一真相来源。
+//
+// 这里必须是响应式的 ref，不能像以前那样每次直接读 localStorage：
+// App.vue 顶栏把角色包在 computed 里，而读 localStorage 不会产生任何
+// 响应式依赖 → computed 首次求值后被永久缓存，再也不重算。
+// 结果是：教师退出后在同一个页面里登录学生账号，姓名会更新（那个 computed
+// 里塞了 `void route.fullPath` 硬凑依赖），但角色标签仍停留在「教师」，
+// 顶栏还会继续显示教师专属菜单。
+const session = ref(readFromStorage())
+
+// 两处存储可能同时存在（旧会话勾了「记住我」写进 localStorage，
+// 新会话没勾写进 sessionStorage）。必须整组读同一处，
+// 否则会出现「token 是 A、角色是 B」这种最危险的错配。
+function pickStore() {
+  if (sessionStorage.getItem(TOKEN_KEY)) return sessionStorage
+  if (localStorage.getItem(TOKEN_KEY)) return localStorage
+  return null
+}
+
+function readFromStorage() {
+  const store = pickStore()
+  if (!store) return { token: '', role: '', user: null }
+  let user = null
+  try { user = JSON.parse(store.getItem(USER_KEY) || 'null') } catch { user = null }
+  return {
+    token: store.getItem(TOKEN_KEY) || '',
+    role: store.getItem(ROLE_KEY) || '',
+    user
+  }
+}
+
+function clearStores() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(ROLE_KEY)
+  localStorage.removeItem(USER_KEY)
+  sessionStorage.removeItem(TOKEN_KEY)
+  sessionStorage.removeItem(ROLE_KEY)
+  sessionStorage.removeItem(USER_KEY)
+}
+
 export function getToken() {
-  return localStorage.getItem(TOKEN_KEY) || sessionStorage.getItem(TOKEN_KEY)
+  return session.value.token
 }
 
 export function getRole() {
-  return localStorage.getItem(ROLE_KEY) || sessionStorage.getItem(ROLE_KEY)
+  return session.value.role
 }
 
 export function getUser() {
-  const raw = localStorage.getItem(USER_KEY) || sessionStorage.getItem(USER_KEY)
-  try { return raw ? JSON.parse(raw) : null } catch { return null }
+  return session.value.user
 }
 
 export function getMustChangePwd() {
@@ -37,20 +78,45 @@ export function isStaff() {
   return r === 'teacher' || r === 'admin'
 }
 
-export function logout() {
-  localStorage.removeItem(TOKEN_KEY)
-  localStorage.removeItem(ROLE_KEY)
-  localStorage.removeItem(USER_KEY)
-  sessionStorage.removeItem(TOKEN_KEY)
-  sessionStorage.removeItem(ROLE_KEY)
-  sessionStorage.removeItem(USER_KEY)
+// 是否为家长
+export function isParent() {
+  return getRole() === 'parent'
 }
 
-function saveSession(result, remember) {
+// 写入登录态。先清空两处存储再写，避免上一账号的残留数据留在另一处，
+// 之后任何一次「跨存储回退读取」都会把两个账号拼成一个不存在的身份。
+export function setSession(result, remember = true) {
+  clearStores()
   const store = remember ? localStorage : sessionStorage
   store.setItem(TOKEN_KEY, result.token)
   store.setItem(ROLE_KEY, result.role)
   store.setItem(USER_KEY, JSON.stringify(result.user))
+  session.value = { token: result.token, role: result.role, user: result.user }
+}
+
+// 局部更新当前用户信息（如改密后清掉 mustChangePwd 标记）
+export function patchSessionUser(patch) {
+  const current = session.value.user
+  if (!current) return
+  const next = { ...current, ...patch }
+  const store = pickStore() || localStorage
+  store.setItem(USER_KEY, JSON.stringify(next))
+  session.value = { ...session.value, user: next }
+}
+
+export function logout() {
+  clearStores()
+  session.value = { token: '', role: '', user: null }
+}
+
+// 多标签页同步：一个标签页退出/切换账号后，其它标签页立即跟上，
+// 避免出现「一个标签页是教师、另一个是学生」的错乱状态。
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (!e.key || [TOKEN_KEY, ROLE_KEY, USER_KEY].includes(e.key)) {
+      session.value = readFromStorage()
+    }
+  })
 }
 
 // ===== 登录请求 =====
@@ -95,20 +161,10 @@ export async function changePassword(oldPassword, newPassword) {
   const data = await r.json()
   if (r.ok && data.success) {
     // 更新本地会话中的 mustChangePwd 标记
-    const u = getUser()
-    if (u) {
-      u.mustChangePwd = false
-      const store = localStorage.getItem(TOKEN_KEY) ? localStorage : sessionStorage
-      store.setItem(USER_KEY, JSON.stringify(u))
-    }
+    patchSessionUser({ mustChangePwd: false })
     return { success: true }
   }
   return { success: false, error: data.error || '修改失败' }
-}
-
-// 是否为家长
-export function isParent() {
-  return getRole() === 'parent'
 }
 
 // 带鉴权的统一请求（返回 { ok, data }，data 为解析后的 JSON）

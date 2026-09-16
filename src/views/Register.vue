@@ -52,7 +52,7 @@
 <script setup>
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { register } from '../api/auth.js'
+import { register, setSession } from '../api/auth.js'
 
 const router = useRouter()
 const form = ref({ code: '', account: '', name: '', className: '', password: '' })
@@ -61,12 +61,9 @@ const showPwd = ref(false)
 const loading = ref(false)
 const errorMsg = ref('')
 
-function saveSession(result) {
-  localStorage.setItem('sga_token', result.token)
-  localStorage.setItem('sga_role', result.role)
-  localStorage.setItem('sga_user', JSON.stringify(result.user))
-}
-
+// 登录态统一由 auth.js 的 setSession 写入。
+// 以前这里自己拼 localStorage，既不响应式，也不清理另一处存储，
+// 会出现「内存里角色没变 / 与旧账号混在一起」的问题。
 async function handleRegister() {
   errorMsg.value = ''
   const f = form.value
@@ -78,7 +75,7 @@ async function handleRegister() {
   try {
     const r = await register(f)
     if (r.success) {
-      saveSession(r)
+      setSession(r, true)
       const target = r.user.mustChangePwd ? '/admin?tab=pwd' : '/app'
       router.push(target)
     } else {

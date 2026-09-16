@@ -147,7 +147,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { login } from '../api/auth.js'
+import { login, setSession } from '../api/auth.js'
 
 const router = useRouter()
 const role = ref('teacher')
@@ -164,16 +164,9 @@ async function handleLogin() {
   try {
     const result = await login(role.value, account.value, password.value)
     if (result.success) {
-      // 存储登录态
-      if (remember.value) {
-        localStorage.setItem('sga_token', result.token)
-        localStorage.setItem('sga_role', result.role)
-        localStorage.setItem('sga_user', JSON.stringify(result.user))
-      } else {
-        sessionStorage.setItem('sga_token', result.token)
-        sessionStorage.setItem('sga_role', result.role)
-        sessionStorage.setItem('sga_user', JSON.stringify(result.user))
-      }
+      // 统一走 setSession：它会先清空另一处存储再写入，
+      // 并同步刷新内存里的响应式会话（顶栏角色即时更新）
+      setSession(result, remember.value)
       let target = '/app'
       if (result.role === 'parent') target = '/parent'
       else if (result.user && result.user.mustChangePwd) target = '/admin?tab=pwd'
