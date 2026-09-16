@@ -11,7 +11,7 @@
         class="edit-switch"
         role="switch"
         :aria-checked="String(editMode)"
-        :title="editMode ? '关闭编辑模式' : '开启后可修改行为评分、作业提交情况、成绩与时间线'"
+        :title="editMode ? '收起所有编辑表单' : '展开成绩录入、时间线编辑等全部编辑表单；关闭时页面为干净只读态'"
         @click="toggleEditMode"
       >
         <span class="switch-track" :class="{ on: editMode }"><span class="switch-thumb"></span></span>
@@ -47,7 +47,7 @@
           <span v-if="student.homework.total" class="hw-detail">
             已交 {{ student.homework.total - student.homework.missed }}/{{ student.homework.total }}
           </span>
-          <button v-if="canEdit" class="btn outline sm" @click="openHomeworkEdit">✏️ 编辑提交情况</button>
+          <button v-if="isStaff" class="btn outline sm" @click="startHomeworkEdit">✏️ 编辑提交情况</button>
         </div>
       </div>
     </div>
@@ -61,7 +61,7 @@
       <div class="card">
         <h2 class="card-head">
           课堂行为雷达
-          <button v-if="canEdit" class="btn outline sm" @click="openBehaviorEdit">✏️ 编辑评分</button>
+          <button v-if="isStaff" class="btn outline sm" @click="startBehaviorEdit">✏️ 编辑评分</button>
         </h2>
         <BehaviorRadar :behavior="student.behavior" />
       </div>
@@ -569,6 +569,16 @@ async function doSaveBehavior() {
     behaviorLoading.value = false
   }
 }
+
+// ========== 编辑模式：一键收起 / 自动进入 ==========
+// 编辑模式的定位从「进入编辑的关卡」改为「一键收起所有编辑表单」：
+// 点编辑按钮本身就表达了明确的编辑意图，直接开始编辑即可，不必先找到并打开开关。
+// （原先编辑按钮藏在编辑模式之后，教师看不到入口，误以为「无法编辑」。）
+function ensureEditMode() {
+  if (!editMode.value) editMode.value = true
+}
+function startHomeworkEdit() { ensureEditMode(); openHomeworkEdit() }
+function startBehaviorEdit() { ensureEditMode(); openBehaviorEdit() }
 
 // ========== 作业提交情况编辑 ==========
 function openHomeworkEdit() {
