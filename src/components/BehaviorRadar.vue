@@ -4,7 +4,7 @@
 
 <script setup>
 import { ref, onMounted, onBeforeUnmount, watch } from 'vue'
-import * as echarts from 'echarts'
+import echarts from '../utils/echarts.js'
 
 const props = defineProps({ behavior: { type: Object, default: () => ({}) } })
 const el = ref(null)
@@ -58,7 +58,7 @@ function render() {
       type: 'text',
       left: 'center',
       bottom: 6,
-      style: { text: '暂无评分数据，教师可在右上角「编辑」录入', fill: '#6b7686', fontSize: 12 }
+      style: { text: '暂无评分数据，可开启「编辑模式」后录入', fill: '#6b7686', fontSize: 12 }
     }]
   }, true)
 }
