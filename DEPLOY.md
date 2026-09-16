@@ -75,6 +75,44 @@ git push -u origin main
   `schema/homework-detail.sql` 是同结构的归档版本，供手工/CI 初始化使用。
 - **好消息**：新表是纯增量，**不影响已有数据**；自动建表失败时接口会降级（档案仍可正常读取）。
 
+### ⚠️ 改数据库前必读：表结构以线上为准
+
+本项目早期是**直接在 D1 控制台手工建表**的，建表语句一度只存在于线上。
+这导致「代码假设的结构」与「线上真实结构」悄悄分叉，并且造成过一个线上必现、
+本地全绿的 bug。现在线上真实结构已导出归档在 **`schema/baseline.sql`**，
+本地测试一律以它建库。
+
+其中最需要记住的一条：
+
+> `homework.rate` 是 **STORED 生成列**，由数据库自己算：
+> ```sql
+> rate REAL GENERATED ALWAYS AS (
+>   CASE WHEN total > 0 THEN (total - missed) * 1.0 / total ELSE 0 END
+> ) STORED
+> ```
+> **生成列禁止写入。** 任何 `INSERT` / `UPDATE` 里带上 `rate` 都会报：
+> `cannot UPDATE generated column "rate": SQLITE_ERROR [code: 7500]`
+> 正确做法：只写 `total` / `missed`，改完再读回来取 `rate`。
+> 代码已统一走 `writeHomeworkSummary()`（它会先探测表结构再决定写哪些列），
+> 新增任何写汇总的代码请复用它，不要自己拼 SQL。
+
+另一个容易踩的点：**`PRAGMA table_info` 不会列出生成列**。
+所以判断「某列能不能写」时，要同时看列清单和 `sqlite_master` 里的建表语句
+（`writeHomeworkSummary` 里就是这么做的）。
+
+### 只想查线上数据/结构时（只读）
+
+```bash
+# 查看所有表的结构
+npx wrangler d1 execute student-growth-archive --remote \
+  --command "SELECT name, sql FROM sqlite_master WHERE type='table'"
+
+# 查某张表的列（注意：生成列不会出现）
+npx wrangler d1 execute student-growth-archive --remote \
+  --command "PRAGMA table_info(homework)"
+```
+
+
 > ⚠️ 注意：Cloudflare Pages 允许给 **Preview 和 Production 绑定不同的 D1 数据库**。
 > 如果你在预览环境录入了测试数据，切到生产看不到，多半是两边绑定了不同的库。
 > 想让两边数据一致，把 Production 的 D1 绑定改成和 Preview 同一个即可。
@@ -100,6 +138,27 @@ curl -s https://<你的域名>/ | grep -o 'assets/[A-Za-z0-9_.-]*\.js'
 ```
 
 两边文件名一致 = 线上已是最新；不一致 = 部署还没完成，或者你推的分支不是生产分支。
+
+### 想直接验证某个「需要登录」的接口（不改动任何真实数据）
+
+写接口都在鉴权后面，浏览器里点不出来的时候可以自己造一个临时登录态：
+
+```bash
+# 1) 造一个临时会话（key 必须是 session:<token>，值就是会话 JSON）
+#    注意：文件不能带 UTF-8 BOM，否则 JSON.parse 会失败、接口静默返回 401
+printf '%s' '{"id":"A001","name":"管理员","role":"admin","className":"全部班级"}' > /tmp/sess.json
+npx wrangler kv key put session:probe-abc123 --path /tmp/sess.json --namespace-id <SESSIONS 的 id>
+
+# 2) 等 30~60 秒（KV 是最终一致，新 key 传到边缘需要时间），再调用接口
+curl -X PUT https://<你的域名>/api/student/<学号>/homework \
+  -H 'Authorization: Bearer probe-abc123' -H 'Content-Type: application/json' \
+  -d '{"total":12,"missed":2}'
+
+# 3) 用完立刻删掉临时会话，并按需还原数据
+npx wrangler kv key delete session:probe-abc123 --namespace-id <SESSIONS 的 id>
+```
+
+`<SESSIONS 的 id>` 见 `wrangler.toml` 的 `[[kv_namespaces]]`。
 
 ## 6. 后续接真实数据（不改前端，只改一个文件）
 
