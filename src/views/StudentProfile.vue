@@ -19,9 +19,15 @@
           <div class="sub" style="color:var(--muted)">{{ student.className }} · 学号 {{ student.id }}</div>
         </div>
         <span class="spacer" style="flex:1"></span>
-        <span class="badge" :class="{ warn: student.homework.rate < 0.9 }">
-          作业提交 {{ Math.round(student.homework.rate * 100) }}%
-        </span>
+        <div class="hw-pill">
+          <span class="badge" :class="{ warn: student.homework.rate < 0.9 }">
+            作业提交 {{ Math.round(student.homework.rate * 100) }}%
+          </span>
+          <span v-if="student.homework.total" class="hw-detail">
+            已交 {{ student.homework.total - student.homework.missed }}/{{ student.homework.total }}
+          </span>
+          <button v-if="isStaff" class="edit-badge" @click="openHomeworkEdit" title="编辑作业提交情况">✏️ 编辑</button>
+        </div>
       </div>
     </div>
 
@@ -105,16 +111,48 @@
           <button class="modal-close" @click="behaviorEditing=false">✕</button>
         </div>
         <div class="modal-body">
-          <p style="font-size:12px;color:var(--muted);margin-bottom:12px">每个维度满分 5 分</p>
+          <p style="font-size:12px;color:var(--muted);margin-bottom:12px">每个维度满分 5 分，拖动滑块调整</p>
           <div v-for="(label, key) in behaviorFields" :key="key" class="behavior-field">
             <label>{{ label }}</label>
             <input v-model.number="behaviorForm[key]" type="range" min="0" max="5" step="0.5" class="slider" />
-            <span class="slider-val">{{ behaviorForm[key] }}</span>
+            <span class="slider-val">{{ Number(behaviorForm[key]).toFixed(1) }}</span>
           </div>
           <p v-if="behaviorMsg" :class="['msg', behaviorMsgType]" style="margin-top:12px">{{ behaviorMsg }}</p>
           <div style="display:flex;gap:8px;margin-top:16px">
             <button class="btn" @click="behaviorEditing=false">取消</button>
             <button class="btn primary" :disabled="behaviorLoading" @click="doSaveBehavior">{{ behaviorLoading ? '保存中…' : '保存' }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 作业提交情况编辑弹窗 -->
+    <div v-if="homeworkEditing" class="modal-overlay" @click.self="homeworkEditing=false">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>编辑作业提交情况</h3>
+          <button class="modal-close" @click="homeworkEditing=false">✕</button>
+        </div>
+        <div class="modal-body">
+          <p style="font-size:12px;color:var(--muted);margin-bottom:12px">
+            填写应交与未交次数，提交率将自动计算
+          </p>
+          <div class="hw-field">
+            <label>应交作业次数</label>
+            <input v-model.number="homeworkForm.total" type="number" min="0" class="input" />
+          </div>
+          <div class="hw-field">
+            <label>未交作业次数</label>
+            <input v-model.number="homeworkForm.missed" type="number" min="0" class="input" />
+          </div>
+          <div class="hw-preview">
+            提交率预览：<strong>{{ homeworkPreview }}%</strong>
+            <span class="hw-bar"><i :style="{ width: homeworkPreview + '%' }"></i></span>
+          </div>
+          <p v-if="homeworkMsg" :class="['msg', homeworkMsgType]" style="margin-top:12px">{{ homeworkMsg }}</p>
+          <div style="display:flex;gap:8px;margin-top:16px">
+            <button class="btn" @click="homeworkEditing=false">取消</button>
+            <button class="btn primary" :disabled="homeworkLoading" @click="doSaveHomework">{{ homeworkLoading ? '保存中…' : '保存' }}</button>
           </div>
         </div>
       </div>
@@ -196,9 +234,9 @@
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent, updateBehavior } from '../api/student.js'
+import { getStudent, generateAIReport, getSubjects, addScore, addEvent, deleteEvent, updateBehavior, updateHomework } from '../api/student.js'
 import { getRole } from '../api/auth.js'
 import ScoreTrendChart from '../components/ScoreTrendChart.vue'
 import BehaviorRadar from '../components/BehaviorRadar.vue'
@@ -228,6 +266,20 @@ const behaviorForm = ref({ raise_hand: 0, focus: 0, cooperation: 0, homework_qua
 const behaviorMsg = ref('')
 const behaviorMsgType = ref('ok')
 const behaviorLoading = ref(false)
+const homeworkEditing = ref(false)
+const homeworkForm = ref({ total: 0, missed: 0 })
+const homeworkMsg = ref('')
+const homeworkMsgType = ref('ok')
+const homeworkLoading = ref(false)
+
+// 作业提交率实时预览
+const homeworkPreview = computed(() => {
+  const t = Number(homeworkForm.value.total) || 0
+  const m = Number(homeworkForm.value.missed) || 0
+  if (t <= 0) return 0
+  return Math.round(((t - Math.min(m, t)) / t) * 100)
+})
+
 const behaviorFields = {
   raise_hand: '举手积极性',
   focus: '专注度',
@@ -421,12 +473,12 @@ async function doDeleteEvent(i) {
 
 // ========== 行为评分编辑 ==========
 function openBehaviorEdit() {
-  const b = student.value.behavior
+  const b = student.value.behavior || {}
   behaviorForm.value = {
-    raise_hand: b['举手'] || 0,
-    focus: b['专注'] || 0,
-    cooperation: b['合作'] || 0,
-    homework_quality: b['作业质量'] || 0
+    raise_hand: Number(b['举手']) || 0,
+    focus: Number(b['专注']) || 0,
+    cooperation: Number(b['合作']) || 0,
+    homework_quality: Number(b['作业质量']) || 0
   }
   behaviorMsg.value = ''
   behaviorEditing.value = true
@@ -461,23 +513,106 @@ async function doSaveBehavior() {
     behaviorLoading.value = false
   }
 }
+
+// ========== 作业提交情况编辑 ==========
+function openHomeworkEdit() {
+  const hw = student.value.homework || {}
+  homeworkForm.value = { total: hw.total || 0, missed: hw.missed || 0 }
+  homeworkMsg.value = ''
+  homeworkEditing.value = true
+}
+
+async function doSaveHomework() {
+  const t = Number(homeworkForm.value.total)
+  const m = Number(homeworkForm.value.missed)
+  if (!Number.isInteger(t) || t < 0) {
+    homeworkMsg.value = '应交次数需为不小于 0 的整数'; homeworkMsgType.value = 'err'; return
+  }
+  if (!Number.isInteger(m) || m < 0) {
+    homeworkMsg.value = '未交次数需为不小于 0 的整数'; homeworkMsgType.value = 'err'; return
+  }
+  if (m > t) {
+    homeworkMsg.value = '未交次数不能超过应交次数'; homeworkMsgType.value = 'err'; return
+  }
+  homeworkLoading.value = true
+  homeworkMsg.value = ''
+  try {
+    const r = await updateHomework(student.value.id, { total: t, missed: m })
+    if (r.success) {
+      homeworkMsg.value = '已保存'
+      homeworkMsgType.value = 'ok'
+      setTimeout(() => { homeworkEditing.value = false }, 800)
+      student.value = await getStudent(student.value.id)
+    } else {
+      homeworkMsg.value = r.error || '保存失败'
+      homeworkMsgType.value = 'err'
+    }
+  } catch (e) {
+    homeworkMsg.value = e.message
+    homeworkMsgType.value = 'err'
+  } finally {
+    homeworkLoading.value = false
+  }
+}
 </script>
 
+<style scoped>
+/* === 编辑入口 === */
 .edit-badge {
-  float: right; font-size: 12px; cursor: pointer; opacity: 0.6;
-  padding: 2px 8px; border-radius: 4px; background: var(--primary-light);
+  font-size: 12px; cursor: pointer; opacity: .65;
+  padding: 3px 9px; border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--primary-light); color: var(--primary);
+  transition: opacity .15s, transform .15s, background .15s;
 }
-.edit-badge:hover { opacity: 1; }
-.behavior-field {
-  display: flex; align-items: center; gap: 12px; margin-bottom: 12px;
+.edit-badge:hover { opacity: 1; transform: translateY(-1px); }
+.card h2 > .edit-badge { float: right; font-weight: 400; }
+
+/* === 作业提交率胶囊 === */
+.hw-pill { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.hw-detail { font-size: 12px; color: var(--muted); }
+
+/* === 行为评分滑块 === */
+.behavior-field { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.behavior-field label { width: 84px; font-size: 14px; color: var(--text); flex-shrink: 0; }
+.behavior-field .slider {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  height: 6px; border-radius: 99px; background: var(--primary-light);
+  outline: none;
 }
-.behavior-field label { width: 80px; font-size: 14px; }
-.behavior-field .slider { flex: 1; }
+.behavior-field .slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--primary); cursor: pointer;
+  box-shadow: 0 1px 4px rgba(47,125,110,.4);
+}
+.behavior-field .slider::-moz-range-thumb {
+  width: 18px; height: 18px; border: none; border-radius: 50%;
+  background: var(--primary); cursor: pointer;
+}
 .behavior-field .slider-val {
-  width: 32px; text-align: center; font-weight: 600; color: var(--primary);
+  width: 34px; text-align: right; font-weight: 600;
+  color: var(--primary); font-variant-numeric: tabular-nums;
 }
 
-<style scoped>
+/* === 作业提交情况表单 === */
+.hw-field { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.hw-field label { width: 96px; font-size: 14px; flex-shrink: 0; }
+.hw-field .input {
+  flex: 1; padding: 8px 12px; border: 1.5px solid #e0e4ea; border-radius: 8px;
+  font-size: 14px; color: var(--text); background: #fff; outline: none;
+}
+.hw-field .input:focus { border-color: var(--primary); }
+.hw-preview {
+  margin-top: 14px; font-size: 13px; color: var(--muted);
+  display: flex; align-items: center; gap: 10px;
+}
+.hw-preview strong { color: var(--primary); font-size: 15px; }
+.hw-bar {
+  flex: 1; height: 6px; border-radius: 99px; background: #eef1f5; overflow: hidden;
+}
+.hw-bar i { display: block; height: 100%; background: var(--primary); border-radius: 99px; transition: width .25s ease; }
+
 .ai-loading { text-align: center; padding: 24px; }
 .ai-loading p { color: var(--muted); margin-top: 12px; }
 .loading-dots { display: inline-flex; gap: 6px; }

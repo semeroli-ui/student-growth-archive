@@ -200,3 +200,15 @@ export async function updateBehavior(studentId, payload) {
   }
   return { success: true }
 }
+
+// 保存作业提交情况（total 应交次数 / missed 未交次数，rate 后端自动计算）
+export async function updateHomework(studentId, payload) {
+  if (USE_WORKER) {
+    return fetchJSON(`${API}/student/${studentId}/homework`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+  }
+  return { success: true }
+}

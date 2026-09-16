@@ -776,6 +776,104 @@ async function handleImportScores(request, env, teacher) {
   return jsonResp({ success: true, imported, skipped, errors, total: scores.length })
 }
 
+// ===== 课堂行为评分编辑 =====
+// 教师保存学生行为四维评分（0-5）：raise_hand 举手 / focus 专注 / cooperation 合作 / homework_quality 作业质量
+async function handleUpdateBehavior(request, env, teacher, studentId) {
+  // 学生必须存在
+  const target = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(studentId).first()
+  if (!target) return jsonResp({ error: '学生不存在' }, 404)
+
+  let body
+  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
+
+  // 验证并收集字段
+  const fields = ['raise_hand', 'focus', 'cooperation', 'homework_quality']
+  const values = {}
+  for (const f of fields) {
+    if (body[f] !== undefined) {
+      const v = Number(body[f])
+      if (isNaN(v) || v < 0 || v > 5) {
+        return jsonResp({ error: f + ' 必须在 0-5 之间' }, 400)
+      }
+      values[f] = v
+    }
+  }
+  if (Object.keys(values).length === 0) {
+    return jsonResp({ error: '没有提供需要更新的字段' }, 400)
+  }
+
+  // UPSERT：如果存在则更新，否则插入
+  const existing = await env.DB.prepare(
+    `SELECT student_id FROM behavior WHERE student_id = ?`
+  ).bind(studentId).first()
+
+  if (existing) {
+    await env.DB.prepare(`
+      UPDATE behavior SET
+        raise_hand = COALESCE(?, raise_hand),
+        focus = COALESCE(?, focus),
+        cooperation = COALESCE(?, cooperation),
+        homework_quality = COALESCE(?, homework_quality),
+        updated_at = datetime('now')
+      WHERE student_id = ?
+    `).bind(
+      values.raise_hand ?? null,
+      values.focus ?? null,
+      values.cooperation ?? null,
+      values.homework_quality ?? null,
+      studentId
+    ).run()
+  } else {
+    await env.DB.prepare(`
+      INSERT INTO behavior (student_id, raise_hand, focus, cooperation, homework_quality)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      studentId,
+      values.raise_hand ?? 0,
+      values.focus ?? 0,
+      values.cooperation ?? 0,
+      values.homework_quality ?? 0
+    ).run()
+  }
+
+  return jsonResp({ success: true })
+}
+
+// ===== 作业提交情况编辑 =====
+// 教师录入/更新学生作业提交统计：total 应交次数，missed 未交次数，rate 自动计算
+async function handleUpdateHomework(request, env, teacher, studentId) {
+  const target = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(studentId).first()
+  if (!target) return jsonResp({ error: '学生不存在' }, 404)
+
+  let body
+  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
+
+  const total = Number(body.total)
+  const missed = Number(body.missed)
+  if (!Number.isInteger(total) || total < 0) return jsonResp({ error: '应交次数必须是不小于 0 的整数' }, 400)
+  if (!Number.isInteger(missed) || missed < 0) return jsonResp({ error: '未交次数必须是不小于 0 的整数' }, 400)
+  if (missed > total) return jsonResp({ error: '未交次数不能超过应交次数' }, 400)
+
+  const rate = total === 0 ? 0 : (total - missed) / total
+
+  // UPSERT
+  const existing = await env.DB.prepare(
+    `SELECT student_id FROM homework WHERE student_id = ?`
+  ).bind(studentId).first()
+
+  if (existing) {
+    await env.DB.prepare(
+      `UPDATE homework SET total = ?, missed = ?, rate = ?, updated_at = datetime('now') WHERE student_id = ?`
+    ).bind(total, missed, rate, studentId).run()
+  } else {
+    await env.DB.prepare(
+      `INSERT INTO homework (student_id, total, missed, rate) VALUES (?, ?, ?, ?)`
+    ).bind(studentId, total, missed, rate).run()
+  }
+
+  return jsonResp({ success: true, rate })
+}
+
 // ===== 主入口 =====
 export async function onRequest(context) {
   const { request, env } = context
@@ -920,6 +1018,20 @@ export async function onRequest(context) {
     return handleDeleteEvent(request, env, path.split('/')[2])
   }
 
+  // 课堂行为评分编辑（教师/管理员）
+  if (path.match(/^\/student\/[^/]+\/behavior$/) && method === 'PUT') {
+    const { user: teacher, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleUpdateBehavior(request, env, teacher, path.split('/')[2])
+  }
+
+  // 作业提交情况编辑（教师/管理员）
+  if (path.match(/^\/student\/[^/]+\/homework$/) && method === 'PUT') {
+    const { user: teacher, response: r } = await requireTeacher(request, env)
+    if (r) return r
+    return handleUpdateHomework(request, env, teacher, path.split('/')[2])
+  }
+
   // 邀请码管理
   if (path === '/admin/invite-codes' && method === 'GET') {
     const { user: a, response: r } = await requireAdmin(request, env)
@@ -997,70 +1109,7 @@ export async function onRequest(context) {
     return handleFixClassNames(request, env)
   }
 
-  
-// ===== 课堂行为评分编辑 =====
-async function handleUpdateBehavior(request, env, teacher, studentId) {
-  // 权限检查：只能编辑自己班级的学生
-  const target = await env.DB.prepare(`SELECT id FROM users WHERE id = ? AND role = 'student'`).bind(studentId).first()
-  if (!target) return jsonResp({ error: '学生不存在' }, 404)
-
-  let body
-  try { body = await request.json() } catch { return jsonResp({ error: '请求体无效' }, 400) }
-
-  // 验证并收集字段
-  const fields = ['raise_hand', 'focus', 'cooperation', 'homework_quality']
-  const values = {}
-  for (const f of fields) {
-    if (body[f] !== undefined) {
-      const v = Number(body[f])
-      if (isNaN(v) || v < 0 || v > 5) {
-        return jsonResp({ error: f + ' 必须在 0-5 之间' }, 400)
-      }
-      values[f] = v
-    }
-  }
-  if (Object.keys(values).length === 0) {
-    return jsonResp({ error: '没有提供需要更新的字段' }, 400)
-  }
-
-  // UPSERT：如果存在则更新，否则插入
-  const existing = await env.DB.prepare(
-    `SELECT student_id FROM behavior WHERE student_id = ?`
-  ).bind(studentId).first()
-
-  if (existing) {
-    await env.DB.prepare(`
-      UPDATE behavior SET
-        raise_hand = COALESCE(?, raise_hand),
-        focus = COALESCE(?, focus),
-        cooperation = COALESCE(?, cooperation),
-        homework_quality = COALESCE(?, homework_quality),
-        updated_at = datetime('now')
-      WHERE student_id = ?
-    `).bind(
-      values.raise_hand ?? null,
-      values.focus ?? null,
-      values.cooperation ?? null,
-      values.homework_quality ?? null,
-      studentId
-    ).run()
-  } else {
-    await env.DB.prepare(`
-      INSERT INTO behavior (student_id, raise_hand, focus, cooperation, homework_quality)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(
-      studentId,
-      values.raise_hand ?? 0,
-      values.focus ?? 0,
-      values.cooperation ?? 0,
-      values.homework_quality ?? 0
-    ).run()
-  }
-
-  return jsonResp({ success: true })
-}
-
-// AI 报告
+  // AI 报告
   if (path === '/ai/report' && method === 'POST') {
     return handleAIReport(request, env, user)
   }
